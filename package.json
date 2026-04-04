@@ -1,0 +1,49 @@
+{
+  "name": "@insightsentry/mcp",
+  "version": "1.3.0",
+  "description": "MCP server for InsightSentry financial data API - provides AI-accessible tools for market data, screening, options, and comprehensive API documentation resources",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "mcp": "./bin/insight-mcp.js",
+    "insight-mcp": "./bin/insight-mcp.js",
+    "insight": "./bin/insight.js"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "scripts": {
+    "generate": "tsx scripts/generate.ts",
+    "generate:docs": "tsx scripts/generate-docs.ts",
+    "build": "npm run generate && tsc",
+    "dev": "tsx src/index.ts",
+    "deploy": "npm run build && npm publish --access public",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "insight",
+    "insightsentry",
+    "financial-data",
+    "stock-market",
+    "financial analysis",
+    "ai financial analysis"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "chart.js": "^4.5.1",
+    "chartjs-node-canvas": "^5.0.0",
+    "jsonata": "^2.1.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.17",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
