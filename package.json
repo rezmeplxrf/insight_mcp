@@ -16,7 +16,6 @@
   ],
   "scripts": {
     "generate": "tsx scripts/generate.ts",
-    "generate:docs": "tsx scripts/generate-docs.ts",
     "build": "npm run generate && tsc",
     "dev": "tsx src/index.ts",
     "deploy": "npm run build && npm publish --access public",
