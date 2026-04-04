@@ -20,6 +20,8 @@
     "build": "npm run generate && tsc",
     "dev": "tsx src/index.ts",
     "deploy": "npm run build && npm publish --access public",
+    "deploy:mcp": "mcp-publisher publish",
+    "deploy:all": "npm run deploy && npm run deploy:mcp",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
