@@ -2,6 +2,7 @@ import { z } from "zod";
 import jsonata from "jsonata";
 import { ApiClient } from "./api-client.js";
 import { toolDefinitions, type ToolDefinition } from "./tool-definitions.js";
+import { saveConfig, deleteConfig, resolveApiKey, getConfigLocation } from "./config.js";
 
 interface ParsedArgs {
   toolName: string | null;
@@ -130,7 +131,11 @@ export function buildHelp(): string {
   lines.push("All tools support --filter <jsonata> to transform the response.");
   lines.push("Use: insight <tool> --help for tool-specific parameters.");
   lines.push("");
-  lines.push("Environment: INSIGHTSENTRY_API_KEY (required)");
+  lines.push("Authentication:");
+  lines.push("  insight login --key <your-api-key>    Save API key (persisted across sessions)");
+  lines.push("  insight logout                        Remove saved API key");
+  lines.push("");
+  lines.push("  Or set INSIGHTSENTRY_API_KEY environment variable (takes priority over saved key).");
   lines.push("  Get your API key from https://insightsentry.com/dashboard");
 
   return lines.join("\n");
@@ -308,6 +313,27 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     return;
   }
 
+  // Built-in commands
+  if (toolName === "login") {
+    const key = args.key;
+    if (!key) {
+      io.write("Usage: insight login --key <your-api-key>\n\nGet your API key from https://insightsentry.com/dashboard");
+      io.exit(1);
+      return;
+    }
+    saveConfig({ apiKey: key });
+    io.write(`API key saved to ${getConfigLocation()}`);
+    io.exit(0);
+    return;
+  }
+
+  if (toolName === "logout") {
+    deleteConfig();
+    io.write(`API key removed from ${getConfigLocation()}`);
+    io.exit(0);
+    return;
+  }
+
   // Find tool
   const tool = toolDefinitions.find((t) => t.name === toolName);
   if (!tool) {
@@ -328,9 +354,9 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
   if (io.request) {
     request = io.request;
   } else {
-    const apiKey = process.env.INSIGHTSENTRY_API_KEY?.trim();
+    const apiKey = resolveApiKey();
     if (!apiKey) {
-      io.write("Error: INSIGHTSENTRY_API_KEY environment variable is not set.\nGet your API key from https://insightsentry.com/dashboard\n");
+      io.write("Error: No API key found.\n\nSet it with:  insight login --key <your-api-key>\nOr export:    export INSIGHTSENTRY_API_KEY=your-api-key\n\nGet your API key from https://insightsentry.com/dashboard");
       io.exit(1);
       return;
     }

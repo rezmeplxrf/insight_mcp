@@ -181,11 +181,30 @@ describe("runCli", () => {
     delete process.env.INSIGHTSENTRY_API_KEY;
     try {
       await runCli(["get_fundamentals_meta"], { write, exit });
-      assert.ok(output.includes("INSIGHTSENTRY_API_KEY"));
+      assert.ok(output.includes("No API key found"));
+      assert.ok(output.includes("insight login"));
       assert.equal(exitCode, 1);
     } finally {
       if (origKey) process.env.INSIGHTSENTRY_API_KEY = origKey;
     }
+  });
+
+  it("login without key shows usage", async () => {
+    await runCli(["login"], { write, exit });
+    assert.ok(output.includes("insight login --key"));
+    assert.equal(exitCode, 1);
+  });
+
+  it("login with key saves config", async () => {
+    await runCli(["login", "--key", "test-jwt-key"], { write, exit });
+    assert.ok(output.includes("API key saved"));
+    assert.equal(exitCode, 0);
+  });
+
+  it("logout removes config", async () => {
+    await runCli(["logout"], { write, exit });
+    assert.ok(output.includes("API key removed"));
+    assert.equal(exitCode, 0);
   });
 
   it("calls API and outputs JSON", async () => {
