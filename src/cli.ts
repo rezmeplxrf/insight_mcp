@@ -119,13 +119,130 @@ export function buildHelp(): string {
   }
 
   lines.push("");
+  lines.push("Quick Start:");
+  lines.push('  insight search_symbols --query "apple"');
+  lines.push('  insight get_quotes --codes "NASDAQ:AAPL,NASDAQ:MSFT"');
+  lines.push('  insight get_symbol_series --symbol "NASDAQ:AAPL" --bar_type day --dp 30');
+  lines.push('  insight screen_stocks --fields "close,volume,market_cap" --exchanges "NYSE,NASDAQ" --sortBy market_cap --sortOrder desc');
+  lines.push('  insight get_earnings --c US');
+  lines.push('  insight list_options --code "NASDAQ:AAPL" --type call --range 10');
+  lines.push("");
   lines.push("All tools support --filter <jsonata> to transform the response.");
   lines.push("Use: insight <tool> --help for tool-specific parameters.");
   lines.push("");
   lines.push("Environment: INSIGHTSENTRY_API_KEY (required)");
+  lines.push("  Get your API key from https://insightsentry.com/dashboard");
 
   return lines.join("\n");
 }
+
+const toolExamples: Record<string, string[]> = {
+  search_symbols: [
+    'insight search_symbols --query "tesla"',
+    'insight search_symbols --query "bitcoin" --type crypto',
+    'insight search_symbols --query "NASDAQ:" --type stock --country US',
+  ],
+  get_quotes: [
+    'insight get_quotes --codes "NASDAQ:AAPL,NASDAQ:MSFT"',
+    'insight get_quotes --codes "BINANCE:BTCUSDT"',
+    `insight get_quotes --codes "NASDAQ:AAPL" --filter '{ "price": data[0].last_price, "change": data[0].change_percent }'`,
+  ],
+  get_symbol_series: [
+    'insight get_symbol_series --symbol "NASDAQ:AAPL" --bar_type day --dp 30',
+    'insight get_symbol_series --symbol "NASDAQ:AAPL" --bar_type minute --bar_interval 5 --dp 100',
+    `insight get_symbol_series --symbol "NASDAQ:AAPL" --bar_type day --dp 30 --filter '{ "last_close": series[-1].close, "avg_vol": $average(series.volume) }'`,
+  ],
+  get_symbol_history: [
+    'insight get_symbol_history --symbol "NASDAQ:AAPL" --bar_type minute --start_date "2025-01"',
+    'insight get_symbol_history --symbol "NASDAQ:AAPL" --bar_type hour --start_date "2025-06" --bar_interval 4',
+  ],
+  get_symbol_contracts: [
+    'insight get_symbol_contracts --symbol "CME_MINI:NQ1!"',
+  ],
+  get_symbol_info: [
+    'insight get_symbol_info --symbol "NASDAQ:AAPL"',
+    `insight get_symbol_info --symbol "NASDAQ:AAPL" --filter '{ "sector": sector, "market_cap": market_cap, "pe": price_earnings_ttm }'`,
+  ],
+  get_symbol_session: [
+    'insight get_symbol_session --symbol "NASDAQ:AAPL"',
+  ],
+  get_symbol_fundamentals: [
+    'insight get_symbol_fundamentals --symbol "NASDAQ:AAPL" --filter \'$distinct(data.category)\'',
+    `insight get_symbol_fundamentals --symbol "NASDAQ:AAPL" --filter 'data[category="Valuation"].{ "id": id, "name": name, "value": value }'`,
+  ],
+  get_fundamentals_series: [
+    'insight get_fundamentals_series --symbol "NASDAQ:AAPL" --ids "total_revenue,net_income"',
+  ],
+  get_fundamentals_meta: [
+    `insight get_fundamentals_meta --filter '$distinct(base.category)'`,
+    `insight get_fundamentals_meta --filter 'base[$contains($lowercase(name), "cash flow")].{ "id": id, "name": name }'`,
+  ],
+  list_options: [
+    'insight list_options --code "NASDAQ:AAPL" --type call --range 10',
+    'insight list_options --code "NASDAQ:AAPL" --expiration_min "2026-06-01" --expiration_max "2026-12-31"',
+  ],
+  get_options_expiration: [
+    'insight get_options_expiration --code "NASDAQ:AAPL" --expiration "2026-06-19" --type call',
+    'insight get_options_expiration --code "NASDAQ:AAPL" --from "2026-06-01" --to "2026-07-01" --range 10',
+  ],
+  get_options_strike: [
+    'insight get_options_strike --code "NASDAQ:AAPL" --strike 250 --type call',
+    'insight get_options_strike --code "NASDAQ:AAPL" --range 5 --sortBy delta --sort desc',
+  ],
+  get_dividends: [
+    'insight get_dividends --c US',
+    'insight get_dividends --code "NASDAQ:AAPL" --w 4',
+  ],
+  get_earnings: [
+    'insight get_earnings --c US',
+    'insight get_earnings --code "NASDAQ:AAPL"',
+  ],
+  get_ipos: [
+    'insight get_ipos --c US',
+    'insight get_ipos --w 4',
+  ],
+  get_events: [
+    'insight get_events --c US',
+    'insight get_events --w 2',
+  ],
+  get_newsfeed: [
+    'insight get_newsfeed --keywords "tesla,apple" --limit 10',
+    `insight get_newsfeed --keywords "bitcoin" --filter 'data[[0..4]].{ "title": title, "published_at": published_at }'`,
+  ],
+  screen_stocks: [
+    'insight screen_stocks --fields "close,volume,market_cap" --exchanges "NYSE,NASDAQ" --sortBy market_cap --sortOrder desc',
+    `insight screen_stocks --fields "close,market_cap,price_earnings_ttm" --exchanges "NYSE,NASDAQ" --sortBy market_cap --sortOrder desc --filter 'data[price_earnings_ttm < 15].{ "name": name, "pe": price_earnings_ttm }'`,
+  ],
+  screen_etfs: [
+    'insight screen_etfs --fields "close,volume,nav" --exchanges "NYSE,NASDAQ" --sortBy nav --sortOrder desc',
+  ],
+  screen_bonds: [
+    'insight screen_bonds --fields "close_percent,yield_to_maturity,volume" --countries "US" --sortBy yield_to_maturity --sortOrder desc',
+  ],
+  screen_crypto: [
+    'insight screen_crypto --fields "close,volume,market_cap" --sortBy market_cap --sortOrder desc',
+  ],
+  get_stock_screener_params: [
+    'insight get_stock_screener_params',
+    `insight get_stock_screener_params --filter 'available_fields[$contains($, "volume")]'`,
+  ],
+  get_etf_screener_params: [
+    'insight get_etf_screener_params',
+  ],
+  get_bond_screener_params: [
+    'insight get_bond_screener_params',
+  ],
+  get_crypto_screener_params: [
+    'insight get_crypto_screener_params',
+  ],
+  get_documents: [
+    'insight get_documents --code "NASDAQ:AAPL"',
+    `insight get_documents --code "NASDAQ:AAPL" --filter '$[form="10-K" or form="10-Q"].{ "id": id, "title": title, "form": form }'`,
+  ],
+  get_document: [
+    'insight get_document --id "transcripts:2133670" --code "NASDAQ:AAPL" --text',
+  ],
+};
 
 export function buildToolHelp(tool: ToolDefinition): string {
   const lines = [
@@ -138,7 +255,7 @@ export function buildToolHelp(tool: ToolDefinition): string {
 
   for (const [key, zodType] of Object.entries(tool.schema)) {
     const optional = zodType.isOptional() ? " [optional]" : "";
-    const desc = zodType.description ?? "";
+    const desc = getZodDescription(zodType);
     const typeName = formatTypeName(zodType);
     lines.push(`  --${key.padEnd(24)} ${typeName}${optional}  ${desc}`);
   }
@@ -146,7 +263,23 @@ export function buildToolHelp(tool: ToolDefinition): string {
   // filter is always available
   lines.push(`  --${"filter".padEnd(24)} string [optional]  JSONata expression to transform the response`);
 
+  const examples = toolExamples[tool.name];
+  if (examples?.length) {
+    lines.push("");
+    lines.push("Examples:");
+    for (const ex of examples) {
+      lines.push(`  ${ex}`);
+    }
+  }
+
   return lines.join("\n");
+}
+
+function getZodDescription(t: z.ZodTypeAny): string {
+  if (t.description) return t.description;
+  const def = (t as any)._zod?.def ?? (t as any)._def ?? {};
+  if (def.innerType) return getZodDescription(def.innerType);
+  return "";
 }
 
 function formatTypeName(t: z.ZodTypeAny): string {
