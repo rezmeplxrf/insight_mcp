@@ -1,7 +1,7 @@
 {
   "name": "@insightsentry/mcp",
   "mcpName": "io.github.rezmeplxrf/insightsentry_mcp",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "MCP server for InsightSentry financial data API - provides AI-accessible tools for market data, screening, options, and comprehensive API documentation resources",
   "type": "module",
   "main": "dist/index.js",
