@@ -46,9 +46,9 @@ Use the \`search_symbols\` tool to find symbol codes.
 
 ### Time Series & Historical Data
 - **GET /v3/symbols/{symbol}/series** — Recent OHLCV data (up to 30k bars) with real-time option
-  - Parameters: bar_type (tick/second/minute/hour/day/week/month), bar_interval (1-1440), dp (data points, 1-30000), extended (pre/post market), dadj (dividend adjustment), badj (back-adjustment), settlement, long_poll (wait for real-time), currency (convert to different currency)
+  - Parameters: bar_type (tick/second/minute/hour/day/week/month), bar_interval (1-1440), dp (data points, 1-30000), extended (pre/post market), dadj (dividend adjustment), split (split adjustment, default true), badj (back-adjustment), settlement, long_poll (wait for real-time), currency (convert to different currency)
 - **GET /v3/symbols/{symbol}/history** — Intraday historical data (second/minute/hour, 20+ years for popular exchanges)
-  - Parameters: bar_type (second/minute/hour, required), bar_interval, start_date (YYYY-MM or YYYY-MM-DD, required), extended, dadj, badj, settlement
+  - Parameters: bar_type (second/minute/hour, required), bar_interval, start_date (YYYY-MM or YYYY-MM-DD, required), extended, dadj, split, badj, settlement
   - Note: Returns one day of data for second bars (YYYY-MM-DD), or one month for minute/hour bars (YYYY-MM). Iterate for longer ranges.
 
 ### Symbol Information
@@ -537,6 +537,8 @@ Interactive examples: https://insightsentry.com/test/realtime and https://insigh
 
                 - dadj - Apply dividend adjustment (default: false) -  details below
 
+                - split - Split adjustment (default: true). When false, dadj is ignored -  details below
+
                 - badj - Apply back-adjustment for continuous futures contracts (default: false) -  details below
 
                 - max_dp - Number of initial historical data points to receive on connect/reconnect (1-30,000). Default: 1. Mega plan: up to 30,000. Other plans: up to 1,000. Values exceeding your plan's limit are clamped automatically.
@@ -852,6 +854,8 @@ Interactive examples: https://insightsentry.com/test/realtime and https://insigh
 
             - dadj: false (default) - Shows unadjusted prices.
 
+            - Note: dadj is ignored when split=false.
+
 
 
           **Example:**
@@ -862,6 +866,33 @@ Interactive examples: https://insightsentry.com/test/realtime and https://insigh
   "api_key": "",
   "subscriptions": [
     {"code": "NASDAQ:AAPL", "bar_type": "day", "bar_interval": 1, "dadj": true}
+
+\`\`\`
+
+
+---
+
+
+### Split Adjustment (split)
+
+          For equities and ETFs, data is split-adjusted by default. Set split=false to receive non-split-adjusted (raw) data.
+
+
+
+            - split: true (default) - Returns split-adjusted prices.
+
+            - split: false - Returns non-split-adjusted prices. When split=false, dadj is ignored.
+
+
+
+          **Example:**
+
+
+\`\`\`json
+{
+  "api_key": "",
+  "subscriptions": [
+    {"code": "NASDAQ:AAPL", "bar_type": "day", "bar_interval": 1, "split": false}
 
 \`\`\`
 
@@ -2434,7 +2465,9 @@ GET https://api.insightsentry.com/v3/symbols/OPRA:AAPL271217P205.0/series?bar_ty
 
               - extended (optional): Include extended hours data (default: true)
 
-              - dadj (optional): Dividend adjustment for equities (default: false)
+              - dadj (optional): Dividend adjustment for equities (default: false). Ignored when split=false.
+
+              - split (optional): Split adjustment for equities/ETFs (default: true). When false, dadj is ignored.
 
               - badj (optional): Back-adjustment for continuous futures (default: true)
 
@@ -2506,7 +2539,8 @@ Only intraday intervals are supported:
 | bar_interval | No | 1 | Interval within the bar type. second: 1,5,10,15,30,45. minute: 1–1440. hour: 1–24. |
 | extended | No | true | Include pre/post market hours. |
 | badj | No | true | Back-adjusted prices (futures). |
-| dadj | No | false | Dividend-adjusted prices (equities). |
+| dadj | No | false | Dividend-adjusted prices (equities). Ignored when split=false. |
+| split | No | true | Split-adjusted prices (equities/ETFs). When false, dadj is ignored. |
 | settlement | No | false | Settlement prices (futures). |
 
 ## Concurrency & Queuing

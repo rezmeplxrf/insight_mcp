@@ -216,6 +216,25 @@ const TOOL_PARAM_OVERRIDES: Record<string, Record<string, string>> = {
   },
 };
 
+// Extra parameters to inject into specific tools (not yet in upstream OpenAPI spec)
+const EXTRA_TOOL_PARAMS: Record<string, { after: string; param: ParamInfo }[]> = {
+  get_symbol_series: [{
+    after: "dadj",
+    param: { name: "split", zodExpr: `z.boolean().describe("(Optional) Split adjustment for equities and etfs. When false, returns non-split-adjusted data and dadj is ignored. Default to true.")`, required: false },
+  }],
+  get_symbol_history: [{
+    after: "dadj",
+    param: { name: "split", zodExpr: `z.boolean().describe("(Optional) Split adjustment for equities and etfs. When false, returns non-split-adjusted data and dadj is ignored. Default to true.")`, required: false },
+  }],
+  get_quotes: [{
+    after: "dadj",
+    param: { name: "split", zodExpr: `z.boolean().describe("(Optional) Split adjustment for equities and etfs. When false, returns non-split-adjusted data and dadj is ignored. Default to true.")`, required: false },
+  }],
+};
+
+// Override dadj description to note split interaction
+const DADJ_OVERRIDE = "(Optional) Dividend adjustment for equities and etfs (has no effect on assets without dividends). Ignored when split=false. Default to false.";
+
 const PARAM_DESCRIPTION_OVERRIDES: Record<string, string> = {
   // Screener POST body params — aligned with /docs/screener
   "fields":
@@ -345,6 +364,24 @@ async function generate(): Promise<void> {
       const description = baseDesc + hint;
 
       const params = collectParams(spec, pathParams, operation, toolName);
+
+      // Override dadj description for tools that have split
+      if (EXTRA_TOOL_PARAMS[toolName]) {
+        for (const p of params) {
+          if (p.name === "dadj") {
+            p.zodExpr = `z.boolean().describe(${escStr(DADJ_OVERRIDE)})`;
+          }
+        }
+        // Inject extra params after the specified param
+        for (const { after, param } of EXTRA_TOOL_PARAMS[toolName]) {
+          const idx = params.findIndex((p) => p.name === after);
+          if (idx !== -1) {
+            params.splice(idx + 1, 0, param);
+          } else {
+            params.push(param);
+          }
+        }
+      }
 
       // Build Zod shape entries
       const shapeLines = params.map((p) => {
