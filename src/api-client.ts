@@ -1,11 +1,39 @@
 const BASE_URL = "https://api.insightsentry.com";
 const HISTORY_PLAN_NAMES = new Set(["ultra", "mega", "enterprise"]);
+const DEFAULT_RETRY_DELAYS_MS = [500, 1000] as const;
+const HISTORY_RATE_LIMIT_RETRY_DELAY_MS = 60_000;
 
 // Symbol code must be EXCHANGE:SYMBOL format (e.g., NASDAQ:AAPL)
 const SYMBOL_CODE_PATTERN = /^[A-Z0-9_./-]+:[A-Z0-9_./!-]+$/;
 
 // Parameter names that expect a symbol code
 const SYMBOL_PARAM_NAMES = new Set(["symbol", "code", "codes"]);
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly apiMessage: string;
+
+  constructor(status: number, apiMessage: string) {
+    super(`API error (${status}): ${apiMessage}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.apiMessage = apiMessage;
+  }
+
+  get retryable(): boolean {
+    return this.status >= 500 && this.status <= 599;
+  }
+
+  get terminal(): boolean {
+    return this.status >= 400 && this.status <= 499;
+  }
+}
+
+export interface ApiClientOptions {
+  retryDelaysMs?: readonly number[];
+  historyRateLimitRetryDelayMs?: number;
+  sleep?: (delayMs: number) => Promise<void>;
+}
 
 function validateSymbolParams(params: Record<string, any>): string | null {
   for (const [key, value] of Object.entries(params)) {
@@ -53,11 +81,42 @@ function validateHistoryPlan(apiKey: string, pathTemplate: string): void {
   );
 }
 
+export function isTerminalApiError(error: unknown): boolean {
+  if (error instanceof ApiError) return error.terminal;
+  const message = error instanceof Error ? error.message : String(error);
+  const status = Number(/API error \((\d{3})\):/.exec(message)?.[1]);
+  return status >= 400 && status <= 499;
+}
+
+async function apiErrorFromResponse(response: Response): Promise<ApiError> {
+  const text = await response.text().catch(() => "");
+  let errorMessage: string;
+  try {
+    const errorJson = JSON.parse(text);
+    errorMessage = errorJson.message || errorJson.error || JSON.stringify(errorJson);
+  } catch {
+    errorMessage = text || `HTTP ${response.status} ${response.statusText}`;
+  }
+  return new ApiError(response.status, errorMessage);
+}
+
+function sleep(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
 export class ApiClient {
   private apiKey: string;
+  private retryDelaysMs: readonly number[];
+  private historyRateLimitRetryDelayMs: number;
+  private historyRateLimitPause: Promise<void> | null = null;
+  private sleep: (delayMs: number) => Promise<void>;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, options: ApiClientOptions = {}) {
     this.apiKey = apiKey;
+    this.retryDelaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+    this.historyRateLimitRetryDelayMs =
+      options.historyRateLimitRetryDelayMs ?? HISTORY_RATE_LIMIT_RETRY_DELAY_MS;
+    this.sleep = options.sleep ?? sleep;
   }
 
   async request(method: string, pathTemplate: string, params: Record<string, any>): Promise<any> {
@@ -104,24 +163,66 @@ export class ApiClient {
       init.body = JSON.stringify(remaining);
     }
 
-    const response = await fetch(url, init);
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      let errorMessage: string;
+    for (let attempt = 0; ; attempt += 1) {
+      let response: Response;
       try {
-        const errorJson = JSON.parse(text);
-        errorMessage = errorJson.message || errorJson.error || JSON.stringify(errorJson);
-      } catch {
-        errorMessage = text || `HTTP ${response.status} ${response.statusText}`;
+        response = await fetch(url, init);
+      } catch (error) {
+        const retryDelay = this.retryDelaysMs[attempt];
+        if (retryDelay !== undefined) {
+          await this.sleep(retryDelay);
+          continue;
+        }
+        throw error;
       }
-      throw new Error(`API error (${response.status}): ${errorMessage}`);
-    }
 
-    const contentType = response.headers.get("content-type") || "";
-    if (contentType.includes("application/json")) {
-      return response.json();
+      if (response.ok) {
+        const contentType = response.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          return response.json();
+        }
+        return response.text();
+      }
+
+      const error = await apiErrorFromResponse(response);
+      if (await this.waitForRetry(error, pathTemplate, attempt)) {
+        continue;
+      }
+      throw error;
     }
-    return response.text();
+  }
+
+  private async waitForRetry(
+    error: ApiError,
+    pathTemplate: string,
+    attempt: number,
+  ): Promise<boolean> {
+    const retryDelay = this.retryDelaysMs[attempt];
+    if (error.retryable && retryDelay !== undefined) {
+      await this.sleep(retryDelay);
+      return true;
+    }
+    if (
+      attempt === 0 &&
+      isHistoryEndpoint(pathTemplate) &&
+      error.status === 429 &&
+      error.apiMessage === "Rate limit exceeded"
+    ) {
+      await this.waitForHistoryRateLimitPause();
+      return true;
+    }
+    return false;
+  }
+
+  private async waitForHistoryRateLimitPause(): Promise<void> {
+    if (!this.historyRateLimitPause) {
+      const pause = this.sleep(this.historyRateLimitRetryDelayMs).finally(() => {
+        if (this.historyRateLimitPause === pause) {
+          this.historyRateLimitPause = null;
+        }
+      });
+      this.historyRateLimitPause = pause;
+    }
+    await this.historyRateLimitPause;
   }
 }

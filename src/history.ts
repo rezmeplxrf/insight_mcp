@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isTerminalApiError } from "./api-client.js";
 import { validateHistoryBarInterval } from "./history-validation.js";
 
 export type HistoryBarType = "second" | "minute" | "hour" | "day" | "week" | "month";
@@ -236,6 +237,8 @@ export async function downloadHistory(
           files: savedFiles,
         });
       } catch (error: any) {
+        if (isTerminalApiError(error)) throw error;
+
         const message = error?.message ?? String(error);
         result.failed += 1;
         result.completed += 1;

@@ -1267,4 +1267,63 @@ describe("downloadHistory", () => {
       await rm(outputDir, { recursive: true, force: true });
     }
   });
+
+  it("aborts ranged downloads on terminal API errors", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
+    let calls = 0;
+
+    try {
+      await assert.rejects(
+        () =>
+          downloadHistory(
+            {
+              symbol: "NASDAQ:AAPL",
+              from: "2024-01",
+              to: "2024-02",
+              bar_type: "minute",
+              output_dir: outputDir,
+              concurrency: 1,
+            },
+            {
+              request: async () => {
+                calls += 1;
+                throw new Error("API error (400): Bad Request");
+              },
+            },
+          ),
+        /API error \(400\): Bad Request/,
+      );
+
+      assert.equal(calls, 1);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records retryable API errors as failed chunks", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
+
+    try {
+      const result = await downloadHistory(
+        {
+          symbol: "NASDAQ:AAPL",
+          from: "2024-01",
+          to: "2024-01",
+          bar_type: "minute",
+          output_dir: outputDir,
+        },
+        {
+          request: async () => {
+            throw new Error("API error (500): Internal Server Error");
+          },
+        },
+      );
+
+      assert.equal(result.completed, 1);
+      assert.equal(result.failed, 1);
+      assert.equal(result.errors[0].message, "API error (500): Internal Server Error");
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
 });
