@@ -138,6 +138,7 @@ describe("buildHelp", () => {
     assert.ok(help.includes("search_symbols"));
     assert.ok(help.includes("get_quotes"));
     assert.ok(help.includes("get_symbol_series"));
+    assert.ok(help.includes("insight whoami"));
   });
 });
 
@@ -250,6 +251,45 @@ describe("runCli", () => {
     await runCli(["logout"], { write, exit });
     assert.ok(output.includes("API key removed"));
     assert.equal(exitCode, 0);
+  });
+
+  it("whoami prints the configured identity", async () => {
+    await runCli(["whoami"], {
+      write,
+      exit,
+      getAuthStatus: () => ({
+        authenticated: true,
+        source: "environment",
+        config_path: "/tmp/insightsentry/config.json",
+        key_present: true,
+        key_format_valid: true,
+        subject: "user@example.com",
+        expires_at: "2026-06-01T00:00:00.000Z",
+        expired: false,
+        message: "Logged in using INSIGHTSENTRY_API_KEY.",
+      }),
+    });
+
+    assert.equal(output, "user@example.com");
+    assert.equal(exitCode, 0);
+  });
+
+  it("whoami reports missing credentials", async () => {
+    await runCli(["whoami"], {
+      write,
+      exit,
+      getAuthStatus: () => ({
+        authenticated: false,
+        source: "none",
+        config_path: "/tmp/insightsentry/config.json",
+        key_present: false,
+        key_format_valid: false,
+        message: "Logged out. No API key found.",
+      }),
+    });
+
+    assert.ok(output.includes("No API key found"));
+    assert.equal(exitCode, 1);
   });
 
   it("calls API and outputs JSON", async () => {

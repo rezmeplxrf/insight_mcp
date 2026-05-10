@@ -3,6 +3,7 @@ import { createInterface } from "node:readline/promises";
 import type { z } from "zod";
 import { ApiClient } from "./api-client.js";
 import { coerceArgs, getZodEnumValues, getZodTypeName, isOptionalZodType } from "./arg-coercion.js";
+import { type AuthStatus, getAuthStatus } from "./auth-status.js";
 import { deleteConfig, getConfigLocation, resolveApiKey, saveConfig } from "./config.js";
 import { type DownloadHistoryOptions, downloadHistory } from "./history.js";
 import { type ToolDefinition, toolDefinitions } from "./tool-definitions.js";
@@ -92,6 +93,7 @@ export function buildHelp(): string {
   lines.push("");
   lines.push("Authentication:");
   lines.push("  insight login --key <your-api-key>    Save API key (persisted across sessions)");
+  lines.push("  insight whoami                        Print the logged-in user's email");
   lines.push("  insight logout                        Remove saved API key");
   lines.push("");
   lines.push(
@@ -289,6 +291,7 @@ interface CliIO {
   progress?: (s: string) => void;
   prompt?: (question: string) => Promise<string>;
   isInteractive?: boolean;
+  getAuthStatus?: () => AuthStatus;
 }
 
 const REQUIRED_DOWNLOAD_HISTORY_ARGS = ["symbol", "bar_type", "from", "to", "output_dir"] as const;
@@ -323,6 +326,18 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     deleteConfig();
     io.write(`API key removed from ${getConfigLocation()}`);
     io.exit(0);
+    return;
+  }
+
+  if (toolName === "whoami") {
+    const status = (io.getAuthStatus ?? getAuthStatus)();
+    if (status.subject) {
+      io.write(status.subject);
+      io.exit(0);
+    } else {
+      io.write(`Error: ${status.message}`);
+      io.exit(1);
+    }
     return;
   }
 

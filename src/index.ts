@@ -3,7 +3,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { ApiClient } from "./api-client.js";
 import { flexibleInputSchema } from "./arg-coercion.js";
+import { getAuthStatus, getWhoami } from "./auth-status.js";
 import { renderChart } from "./chart.js";
+import { resolveApiKeyWithSource } from "./config.js";
 import { downloadHistory } from "./history.js";
 import { docResources } from "./resources.js";
 import { toolDefinitions } from "./tool-definitions.js";
@@ -26,6 +28,9 @@ Examples of correct codes:
 If you're unsure about a symbol code, search for it: \`search_symbols({ query: "apple" })\`
 
 ## Common Workflows
+
+### "Am I logged in?" / "Is InsightSentry configured?"
+Call \`whoami\` to check whether this MCP server has an InsightSentry API key configured. It parses the local JWT and returns the logged-in user's email/uuid without calling the external API.
 
 ### "Get me data on a stock/crypto/asset"
 1. \`search_symbols\` — **Always start here.** Find the correct EXCHANGE:SYMBOL code.
@@ -169,30 +174,21 @@ Then pass labels and close arrays to \`render_chart\` as a line chart.
 - Default dimensions: 800×400px. Use \`width\`/\`height\` params to customize (200–2000px).
 `;
 
-const apiKey = process.env.INSIGHTSENTRY_API_KEY?.trim();
-
-function isJwt(token: string): boolean {
-  const parts = token.split(".");
-  if (parts.length !== 3) return false;
-  try {
-    for (const part of parts.slice(0, 2)) {
-      atob(part.replace(/-/g, "+").replace(/_/g, "/"));
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
+const { apiKey } = resolveApiKeyWithSource();
 
 let client: ApiClient | null = null;
 let apiKeyError: string | null = null;
+const authStatus = getAuthStatus();
 
 if (!apiKey) {
   apiKeyError =
-    "INSIGHTSENTRY_API_KEY environment variable is not set. Get your API key from https://insightsentry.com/dashboard";
-} else if (!isJwt(apiKey)) {
+    "No InsightSentry API key found. Set INSIGHTSENTRY_API_KEY or run `insight login --key <your-api-key>`. Get your API key from https://insightsentry.com/dashboard";
+} else if (!authStatus.key_format_valid) {
   apiKeyError =
-    "INSIGHTSENTRY_API_KEY is not a valid API key. InsightSentry API keys are JWT tokens. Get your API key from https://insightsentry.com/dashboard";
+    "InsightSentry API key is not a valid API key. InsightSentry API keys are JWT tokens. Get your API key from https://insightsentry.com/dashboard";
+} else if (authStatus.expired) {
+  apiKeyError =
+    "InsightSentry API key is expired. Get a new API key from https://insightsentry.com/dashboard";
 } else {
   client = new ApiClient(apiKey);
 }
@@ -200,6 +196,29 @@ if (!apiKey) {
 const server = new McpServer(
   { name: "insightsentry", version: "1.0.0" },
   { instructions: INSTRUCTIONS },
+);
+
+server.registerTool(
+  "whoami",
+  {
+    description:
+      "Print the logged-in InsightSentry user's email/uuid by parsing the configured API key JWT locally. This does not call the external API.",
+    inputSchema: {},
+  },
+  async () => {
+    const result = getWhoami();
+    if (!result.ok || !result.identity) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${result.error}` }],
+        isError: true,
+      };
+    }
+
+    const identity = result.identity;
+    return {
+      content: [{ type: "text" as const, text: identity }],
+    };
+  },
 );
 
 // Register all API tools with Zod schemas for type-safe parameter validation

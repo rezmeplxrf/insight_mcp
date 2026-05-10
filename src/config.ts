@@ -6,6 +6,8 @@ interface Config {
   apiKey?: string;
 }
 
+type ApiKeySource = "environment" | "config" | "none";
+
 function getConfigDir(): string {
   const p = platform();
   if (p === "win32") {
@@ -46,7 +48,18 @@ export function deleteConfig(): void {
 
 /** Returns the API key from env var (priority) or stored config */
 export function resolveApiKey(): string | undefined {
-  return process.env.INSIGHTSENTRY_API_KEY?.trim() || loadConfig().apiKey;
+  return resolveApiKeyWithSource().apiKey;
+}
+
+/** Returns the API key and where it came from. Env var takes priority over saved config. */
+export function resolveApiKeyWithSource(): { apiKey?: string; source: ApiKeySource } {
+  const envKey = process.env.INSIGHTSENTRY_API_KEY?.trim();
+  if (envKey) return { apiKey: envKey, source: "environment" };
+
+  const configKey = loadConfig().apiKey?.trim();
+  if (configKey) return { apiKey: configKey, source: "config" };
+
+  return { source: "none" };
 }
 
 export function getConfigLocation(): string {
