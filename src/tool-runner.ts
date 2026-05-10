@@ -4,6 +4,7 @@ import {
   storeResponse,
   validateResponseStorage,
 } from "./response-storage.js";
+import { validateSymbolLikeArgs } from "./symbol-validation.js";
 
 export type ApiToolRequestFn = (
   method: string,
@@ -29,6 +30,10 @@ export async function runApiTool(options: RunApiToolOptions): Promise<any> {
     requestParams: apiArgs,
   };
 
+  const symbolValidationError = validateSymbolLikeArgs(apiArgs);
+  if (symbolValidationError) {
+    throw new Error(`Invalid ${symbolValidationError.key}: ${symbolValidationError.error}`);
+  }
   validateResponseStorage(storeOptions);
   const result = await options.request(options.method, options.pathTemplate, apiArgs);
   const stored = await storeResponse(result, storeOptions);

@@ -323,6 +323,73 @@ describe("runCli", () => {
     assert.equal(exitCode, undefined);
   });
 
+  it("prompts for optional tool arguments in interactive mode and shows defaults", async () => {
+    const questions: string[] = [];
+    const mockRequest = async (
+      _method: string,
+      _pathTemplate: string,
+      params: Record<string, any>,
+    ) => params;
+
+    await runCli(["get_symbol_series", "--symbol", "NASDAQ:AAPL"], {
+      write,
+      exit,
+      request: mockRequest,
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.includes("Bar Type")) return "minute";
+        if (question.includes("Settlement")) return "true";
+        return "";
+      },
+    });
+
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.symbol, "NASDAQ:AAPL");
+    assert.equal(parsed.bar_type, "minute");
+    assert.equal(parsed.settlement, true);
+    assert.ok(questions.some((question) => question.includes("Bar Type")));
+    assert.ok(questions.some((question) => question.includes("Default: day")));
+    assert.ok(questions.some((question) => question.includes("Settlement")));
+    assert.ok(questions.some((question) => question.includes("Default: false")));
+  });
+
+  it("validates provided tool arguments before calling the API", async () => {
+    await runCli(["get_symbol_history", "--symbol", "NASDAQ:AAPL", "--bar_type", "daily"], {
+      write,
+      exit,
+      request: async () => assert.fail("invalid args should fail before request"),
+    });
+
+    assert.ok(output.includes("Invalid Bar Type"));
+    assert.ok(output.includes("second, minute, hour"));
+    assert.equal(exitCode, 1);
+  });
+
+  it("validates symbol code format before calling the API", async () => {
+    await runCli(["get_symbol_info", "--symbol", "AAPL"], {
+      write,
+      exit,
+      request: async () => assert.fail("invalid symbol should fail before request"),
+    });
+
+    assert.ok(output.includes("Invalid Symbol"));
+    assert.ok(output.includes("EXCHANGE:SYMBOL"));
+    assert.equal(exitCode, 1);
+  });
+
+  it("validates comma-separated symbol codes before calling the API", async () => {
+    await runCli(["get_quotes", "--codes", "NASDAQ:AAPL,AAPL"], {
+      write,
+      exit,
+      request: async () => assert.fail("invalid codes should fail before request"),
+    });
+
+    assert.ok(output.includes("Invalid Codes"));
+    assert.ok(output.includes("AAPL"));
+    assert.equal(exitCode, 1);
+  });
+
   it("reprompts when an interactive tool argument is invalid", async () => {
     const answers = ["daily", "minute"];
     const mockRequest = async (
@@ -652,6 +719,91 @@ describe("runCli", () => {
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
+  });
+
+  it("prompts for optional download_history arguments in interactive mode", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
+    const questions: string[] = [];
+
+    try {
+      await runCli(
+        [
+          "download_history",
+          "--symbol",
+          "NASDAQ:AAPL",
+          "--bar_type",
+          "minute",
+          "--from",
+          "2024-01",
+          "--to",
+          "2024-01",
+          "--output_dir",
+          outputDir,
+        ],
+        {
+          write,
+          exit,
+          isInteractive: true,
+          prompt: async (question) => {
+            questions.push(question);
+            if (question.includes("Format")) return "json";
+            if (question.includes("Merge")) return "false";
+            if (question.includes("Extended")) return "true";
+            return "";
+          },
+          request: async (_method, _pathTemplate, params) => ({
+            code: params.symbol,
+            format: params.format,
+            extended: params.extended,
+            bar_type: "1m",
+            series: [{ time: 1, close: 10 }],
+          }),
+        },
+      );
+
+      const parsed = JSON.parse(output);
+      assert.equal(parsed.failed, 0);
+      assert.equal(parsed.merged_file, undefined);
+      assert.ok(parsed.files.every((file: string) => file.endsWith(".json")));
+      assert.ok(questions.some((question) => question.includes("Format")));
+      assert.ok(questions.some((question) => question.includes("Default: csv")));
+      assert.ok(questions.some((question) => question.includes("Merge")));
+      assert.ok(questions.some((question) => question.includes("Default: true")));
+      assert.ok(questions.some((question) => question.includes("Extended")));
+      assert.ok(questions.some((question) => question.includes("Dadj")));
+      assert.ok(questions.some((question) => question.includes("Badj")));
+      assert.ok(questions.some((question) => question.includes("Settlement")));
+      assert.ok(questions.some((question) => question.includes("Default: false")));
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("validates download_history symbol format before planning requests", async () => {
+    await runCli(
+      [
+        "download_history",
+        "--symbol",
+        "AAPL",
+        "--bar_type",
+        "minute",
+        "--from",
+        "2024-01",
+        "--to",
+        "2024-01",
+        "--output_dir",
+        ".",
+      ],
+      {
+        write,
+        exit,
+        request: async () => assert.fail("invalid symbol should fail before request"),
+      },
+    );
+
+    assert.ok(output.includes("Invalid Symbol"));
+    assert.ok(output.includes("EXCHANGE:SYMBOL"));
+    assert.equal(exitCode, 1);
   });
 
   it("reprompts when an interactive download_history argument is invalid", async () => {

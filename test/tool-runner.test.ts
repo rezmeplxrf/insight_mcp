@@ -124,4 +124,38 @@ describe("tool runner", () => {
       /csv storage is only supported for get_symbol_series/,
     );
   });
+
+  it("rejects invalid symbol codes before calling the API", async () => {
+    const request: ApiToolRequestFn = async () =>
+      assert.fail("invalid symbol should fail before request");
+
+    await assert.rejects(
+      () =>
+        runApiTool({
+          toolName: "get_symbol_info",
+          method: "GET",
+          pathTemplate: "/symbols/{symbol}/info",
+          args: { symbol: "AAPL" },
+          request,
+        }),
+      /Invalid symbol: expected EXCHANGE:SYMBOL format/,
+    );
+  });
+
+  it("rejects invalid comma-separated quote codes before calling the API", async () => {
+    const request: ApiToolRequestFn = async () =>
+      assert.fail("invalid codes should fail before request");
+
+    await assert.rejects(
+      () =>
+        runApiTool({
+          toolName: "get_quotes",
+          method: "GET",
+          pathTemplate: "/symbols/quotes",
+          args: { codes: "NASDAQ:AAPL,AAPL" },
+          request,
+        }),
+      /Invalid codes: AAPL: expected EXCHANGE:SYMBOL format/,
+    );
+  });
 });

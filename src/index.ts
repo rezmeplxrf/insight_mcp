@@ -6,8 +6,10 @@ import { flexibleInputSchema } from "./arg-coercion.js";
 import { getAuthStatus, getWhoami } from "./auth-status.js";
 import { renderChart } from "./chart.js";
 import { resolveApiKeyWithSource } from "./config.js";
+import { downloadHistorySchema } from "./download-history-schema.js";
 import { downloadHistory } from "./history.js";
 import { docResources } from "./resources.js";
+import { validateSymbolLikeArgs } from "./symbol-validation.js";
 import { toolDefinitions } from "./tool-definitions.js";
 import { runApiTool } from "./tool-runner.js";
 
@@ -289,40 +291,7 @@ server.registerTool(
   {
     description:
       "Download historical data over a from/to date range and save files locally as JSON, CSV, or both. second bars create one /history request per day, minute/hour bars create one /history request per month, and day/week/month bars use one /series request with dp=30000 and date filtering. Continuous futures ending in 1! or 2! are detected automatically and expanded to specific contract codes for second/minute/hour. Shows progress in the final summary and supports concurrency 1-10, default 5.",
-    inputSchema: flexibleInputSchema({
-      symbol: z
-        .string()
-        .describe("Symbol code in EXCHANGE:SYMBOL format, e.g. NASDAQ:AAPL or CME_MINI:NQ1!"),
-      from: z.string().describe("Start date. Use YYYY-MM or YYYY-MM-DD."),
-      to: z.string().describe("End date. Use YYYY-MM or YYYY-MM-DD."),
-      bar_type: z
-        .enum(["second", "minute", "hour", "day", "week", "month"])
-        .describe("Bar type. second/minute/hour use /history; day/week/month use /series."),
-      output_dir: z.string().describe("Directory where downloaded files should be stored."),
-      bar_interval: z.number().int().min(1).max(1440).optional(),
-      format: z.enum(["json", "csv", "both"]).default("csv").optional(),
-      merge: z
-        .boolean()
-        .default(true)
-        .optional()
-        .describe(
-          "Write one merged CSV file for the whole run when format is csv or both. Default is true.",
-        ),
-      keep_chunks: z
-        .boolean()
-        .default(false)
-        .optional()
-        .describe(
-          "Keep per-request CSV chunk files after merged CSV is written. Default is false.",
-        ),
-      concurrency: z.number().int().min(1).max(10).default(5).optional(),
-      contract_lookback_months: z.number().int().min(1).default(6).optional(),
-      overwrite: z.boolean().default(false).optional(),
-      extended: z.boolean().optional(),
-      dadj: z.boolean().optional(),
-      badj: z.boolean().optional(),
-      settlement: z.boolean().optional(),
-    }),
+    inputSchema: flexibleInputSchema(downloadHistorySchema),
   },
   async (args: any) => {
     if (!client) {
@@ -338,6 +307,10 @@ server.registerTool(
     }
 
     try {
+      const symbolValidationError = validateSymbolLikeArgs(args);
+      if (symbolValidationError) {
+        throw new Error(`Invalid ${symbolValidationError.key}: ${symbolValidationError.error}`);
+      }
       const activeClient = client;
       const progress: string[] = [];
       const result = await downloadHistory(args, {

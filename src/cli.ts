@@ -5,7 +5,9 @@ import { ApiClient } from "./api-client.js";
 import { coerceArgs, getZodEnumValues, getZodTypeName, isOptionalZodType } from "./arg-coercion.js";
 import { type AuthStatus, getAuthStatus } from "./auth-status.js";
 import { deleteConfig, getConfigLocation, resolveApiKey, saveConfig } from "./config.js";
+import { downloadHistorySchema } from "./download-history-schema.js";
 import { type DownloadHistoryOptions, downloadHistory } from "./history.js";
+import { validateSymbolLikeArg } from "./symbol-validation.js";
 import { type ToolDefinition, toolDefinitions } from "./tool-definitions.js";
 import { runApiTool } from "./tool-runner.js";
 
@@ -13,14 +15,6 @@ export { coerceArgs } from "./arg-coercion.js";
 
 const DOWNLOAD_HISTORY_COMMAND = "download_history";
 const MAX_INTERACTIVE_PROMPT_ATTEMPTS = 3;
-const DOWNLOAD_HISTORY_BAR_TYPES: readonly string[] = [
-  "second",
-  "minute",
-  "hour",
-  "day",
-  "week",
-  "month",
-];
 
 interface ParsedArgs {
   toolName: string | null;
@@ -367,10 +361,26 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     }
 
     try {
+      const providedValidationError = validateDownloadHistoryArgs(args);
+      if (providedValidationError) {
+        io.write(
+          `Invalid ${downloadHistoryPromptLabel(providedValidationError.key)}: ${providedValidationError.error}\n`,
+        );
+        io.exit(1);
+        return;
+      }
       const historyArgs = await resolveDownloadHistoryArgs(args, io);
       if (!historyArgs) {
         io.write(
           `Error: Missing required options for download_history: ${missingDownloadHistoryArgs(args).join(", ")}\n\nRun: insight download_history --help`,
+        );
+        io.exit(1);
+        return;
+      }
+      const validationError = validateDownloadHistoryArgs(historyArgs);
+      if (validationError) {
+        io.write(
+          `Invalid ${downloadHistoryPromptLabel(validationError.key)}: ${validationError.error}\n`,
         );
         io.exit(1);
         return;
@@ -418,11 +428,27 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     return;
   }
 
+  const providedValidationError = validateResolvedToolArgs(args, tool);
+  if (providedValidationError) {
+    io.write(
+      `Invalid ${toolPromptLabel(providedValidationError.key)}: ${providedValidationError.error}\n`,
+    );
+    io.exit(1);
+    return;
+  }
+
   const resolvedArgs = await resolveToolArgs(args, tool, io);
   if (!resolvedArgs) {
     io.write(
       `Error: Missing required options for ${tool.name}: ${missingToolArgs(args, tool).join(", ")}\n\nRun: insight ${tool.name} --help`,
     );
+    io.exit(1);
+    return;
+  }
+
+  const validationError = validateResolvedToolArgs(resolvedArgs, tool);
+  if (validationError) {
+    io.write(`Invalid ${toolPromptLabel(validationError.key)}: ${validationError.error}\n`);
     io.exit(1);
     return;
   }
@@ -473,18 +499,24 @@ async function resolveToolArgs(
   io: CliIO,
 ): Promise<Record<string, string> | null> {
   const resolved = { ...args };
-  const missing = missingToolArgs(resolved, tool);
-  if (missing.length > 0) {
-    if (io.isInteractive !== true || !io.prompt) return null;
-
-    for (const key of missing) {
-      const answer = await promptForToolArg(key, tool.schema[key], io);
-      if (!answer) return null;
-      resolved[key] = answer;
+  if (io.isInteractive === true && io.prompt) {
+    for (const [key, zodType] of Object.entries(tool.schema)) {
+      if (resolved[key] !== undefined) continue;
+      if (isOptionalZodType(zodType)) {
+        const answer = await promptForOptionalToolArg(key, zodType, io);
+        if (answer === null) return null;
+        if (answer !== undefined) resolved[key] = answer;
+      } else {
+        const answer = await promptForToolArg(key, zodType, io);
+        if (!answer) return null;
+        resolved[key] = answer;
+      }
     }
-
-    if (missingToolArgs(resolved, tool).length > 0) return null;
+  } else if (missingToolArgs(resolved, tool).length > 0) {
+    return null;
   }
+
+  if (missingToolArgs(resolved, tool).length > 0) return null;
 
   if (
     io.isInteractive === true &&
@@ -520,15 +552,22 @@ async function resolveDownloadHistoryArgs(
   args: Record<string, string>,
   io: CliIO,
 ): Promise<Record<string, string> | null> {
-  const missing = missingDownloadHistoryArgs(args);
-  if (missing.length === 0) return args;
-  if (io.isInteractive !== true || !io.prompt) return null;
+  if (io.isInteractive !== true || !io.prompt) {
+    return missingDownloadHistoryArgs(args).length === 0 ? args : null;
+  }
 
   const resolved = { ...args };
-  for (const key of missing) {
-    const answer = await promptForDownloadHistoryArg(key, io);
-    if (!answer) return null;
-    resolved[key] = answer;
+  for (const [key, zodType] of Object.entries(downloadHistorySchema)) {
+    if (resolved[key] !== undefined) continue;
+    if (REQUIRED_DOWNLOAD_HISTORY_ARGS.includes(key as RequiredDownloadHistoryArg)) {
+      const answer = await promptForDownloadHistoryArg(key as RequiredDownloadHistoryArg, io);
+      if (!answer) return null;
+      resolved[key] = answer;
+    } else {
+      const answer = await promptForOptionalDownloadHistoryArg(key, zodType, io);
+      if (answer === null) return null;
+      if (answer !== undefined) resolved[key] = answer;
+    }
   }
 
   return missingDownloadHistoryArgs(resolved).length === 0 ? resolved : null;
@@ -549,8 +588,28 @@ async function promptForToolArg(
   return null;
 }
 
+async function promptForOptionalToolArg(
+  key: string,
+  zodType: z.ZodTypeAny,
+  io: CliIO,
+): Promise<string | undefined | null> {
+  const label = toolPromptLabel(key);
+  const question = optionalPromptQuestion(label, zodType);
+  for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
+    const answer = (await io.prompt?.(question))?.trim() ?? "";
+    if (!answer) return undefined;
+    const error = validateToolArgAnswer(key, zodType, answer);
+    if (!error) return answer;
+    io.write(`Invalid ${label}: ${error}\n`);
+  }
+  return null;
+}
+
 function validateToolArgAnswer(key: string, zodType: z.ZodTypeAny, answer: string): string | null {
   if (!answer) return "value is required";
+
+  const symbolError = validateSymbolLikeArg(key, answer);
+  if (symbolError) return symbolError;
 
   const coerced = coerceArgs({ [key]: answer }, { [key]: zodType })[key];
   const parsed = zodType.safeParse(coerced);
@@ -559,6 +618,18 @@ function validateToolArgAnswer(key: string, zodType: z.ZodTypeAny, answer: strin
   const enumValues = getZodEnumValues(zodType);
   if (enumValues.length > 0) return `expected one of: ${enumValues.join(", ")}`;
   return parsed.error.issues.map((issue) => issue.message).join("; ");
+}
+
+function validateResolvedToolArgs(
+  args: Record<string, string>,
+  tool: ToolDefinition,
+): { key: string; error: string } | null {
+  for (const [key, zodType] of Object.entries(tool.schema)) {
+    if (args[key] === undefined) continue;
+    const error = validateToolArgAnswer(key, zodType, args[key]);
+    if (error) return { key, error };
+  }
+  return null;
 }
 
 async function promptForDownloadHistoryArg(
@@ -575,18 +646,52 @@ async function promptForDownloadHistoryArg(
   return null;
 }
 
-function validateDownloadHistoryArgAnswer(
-  key: RequiredDownloadHistoryArg,
-  answer: string,
-): string | null {
+function validateDownloadHistoryArgAnswer(key: string, answer: string): string | null {
   if (!answer) return "value is required";
-  if (key === "bar_type" && !DOWNLOAD_HISTORY_BAR_TYPES.includes(answer)) {
-    return `expected one of: ${DOWNLOAD_HISTORY_BAR_TYPES.join(", ")}`;
+
+  const symbolError = validateSymbolLikeArg(key, answer);
+  if (symbolError) return symbolError;
+
+  const zodType = downloadHistorySchema[key];
+  if (!zodType) return null;
+  const coerced = coerceArgs({ [key]: answer }, { [key]: zodType })[key];
+  const parsed = zodType.safeParse(coerced);
+  if (parsed.success) return null;
+
+  const enumValues = getZodEnumValues(zodType);
+  if (enumValues.length > 0) return `expected one of: ${enumValues.join(", ")}`;
+  return parsed.error.issues.map((issue) => issue.message).join("; ");
+}
+
+async function promptForOptionalDownloadHistoryArg(
+  key: string,
+  zodType: z.ZodTypeAny,
+  io: CliIO,
+): Promise<string | undefined | null> {
+  const label = downloadHistoryPromptLabel(key);
+  const question = optionalPromptQuestion(label, zodType);
+  for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
+    const answer = (await io.prompt?.(question))?.trim() ?? "";
+    if (!answer) return undefined;
+    const error = validateDownloadHistoryArgAnswer(key, answer);
+    if (!error) return answer;
+    io.write(`Invalid ${label}: ${error}\n`);
   }
   return null;
 }
 
-function downloadHistoryPromptLabel(key: RequiredDownloadHistoryArg): string {
+function validateDownloadHistoryArgs(
+  args: Record<string, string>,
+): { key: string; error: string } | null {
+  for (const key of Object.keys(downloadHistorySchema)) {
+    if (args[key] === undefined) continue;
+    const error = validateDownloadHistoryArgAnswer(key, args[key]);
+    if (error) return { key, error };
+  }
+  return null;
+}
+
+function downloadHistoryPromptLabel(key: string): string {
   switch (key) {
     case "symbol":
       return "Symbol";
@@ -598,20 +703,31 @@ function downloadHistoryPromptLabel(key: RequiredDownloadHistoryArg): string {
       return "To (YYYY-MM or YYYY-MM-DD)";
     case "output_dir":
       return "Output directory";
+    case "format":
+      return "Format";
+    case "keep_chunks":
+      return "Keep chunks";
+    case "contract_lookback_months":
+      return "Contract lookback months";
+    case "bar_interval":
+      return "Bar interval";
+    default:
+      return toolPromptLabel(key);
   }
 }
 
 function parseDownloadHistoryArgs(args: Record<string, string>): DownloadHistoryOptions {
+  const coerced = coerceArgs(args, downloadHistorySchema);
   const options: DownloadHistoryOptions = {
-    symbol: args.symbol,
-    from: args.from,
-    to: args.to,
-    bar_type: args.bar_type as DownloadHistoryOptions["bar_type"],
-    output_dir: args.output_dir,
+    symbol: coerced.symbol,
+    from: coerced.from,
+    to: coerced.to,
+    bar_type: coerced.bar_type as DownloadHistoryOptions["bar_type"],
+    output_dir: coerced.output_dir,
   };
 
   for (const key of ["bar_interval", "concurrency", "contract_lookback_months"] as const) {
-    if (args[key] !== undefined) options[key] = Number(args[key]);
+    if (coerced[key] !== undefined) options[key] = coerced[key];
   }
   for (const key of [
     "overwrite",
@@ -622,13 +738,51 @@ function parseDownloadHistoryArgs(args: Record<string, string>): DownloadHistory
     "badj",
     "settlement",
   ] as const) {
-    if (args[key] !== undefined) options[key] = args[key] === "true";
+    if (coerced[key] !== undefined) options[key] = coerced[key];
   }
-  if (args.format !== undefined) {
-    options.format = args.format as DownloadHistoryOptions["format"];
+  if (coerced.format !== undefined) {
+    options.format = coerced.format as DownloadHistoryOptions["format"];
   }
 
   return options;
+}
+
+function optionalPromptQuestion(label: string, zodType: z.ZodTypeAny): string {
+  const parts = ["optional"];
+  const enumValues = getZodEnumValues(zodType);
+  if (enumValues.length > 0) parts.push(`choices: ${enumValues.join("/")}`);
+
+  const defaultValue = getPromptDefault(zodType);
+  if (defaultValue !== null) parts.push(`Default: ${defaultValue}`);
+  parts.push("press Enter to skip");
+
+  return `${label} (${parts.join(", ")}): `;
+}
+
+function getPromptDefault(zodType: z.ZodTypeAny): string | null {
+  const zodDefault = getZodDefaultValue(zodType);
+  if (zodDefault !== undefined) return String(zodDefault);
+
+  const descriptionDefault = extractDefaultFromDescription(getZodDescription(zodType));
+  return descriptionDefault ? descriptionDefault : null;
+}
+
+function getZodDefaultValue(t: z.ZodTypeAny): unknown {
+  const def = (t as any)._zod?.def ?? (t as any)._def ?? {};
+  const type = def.type ?? def.typeName ?? "";
+  if (type === "default") {
+    return typeof def.defaultValue === "function" ? def.defaultValue() : def.defaultValue;
+  }
+  if ((type === "optional" || type === "default") && def.innerType) {
+    return getZodDefaultValue(def.innerType);
+  }
+  return undefined;
+}
+
+function extractDefaultFromDescription(description: string): string | null {
+  const match = description.match(/Default(?:\s+is|\s+to|:)\s+['"`]?([^.'"`]+)['"`]?/i);
+  if (!match) return null;
+  return match[1].trim().replace(/^["']|["']$/g, "");
 }
 
 export function main() {
