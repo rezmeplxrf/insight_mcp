@@ -7,6 +7,7 @@ import { toolDefinitions } from "./tool-definitions.js";
 import { docResources } from "./resources.js";
 import { renderChart } from "./chart.js";
 import { downloadHistory } from "./history.js";
+import { storeResponse, validateResponseStorage } from "./response-storage.js";
 
 const INSTRUCTIONS = `You are connected to the InsightSentry financial data API. You have access to real-time and historical market data for equities, futures, options, crypto, forex, and more.
 
@@ -206,6 +207,13 @@ for (const tool of toolDefinitions) {
   const schema = {
     ...tool.schema,
     filter: z.string().describe("(Optional) JSONata expression to filter/transform the API response server-side before it reaches you. Use this to extract only the fields or rows you need, reducing token usage. See https://jsonata.org for syntax.").optional(),
+    store: z
+      .enum(["none", "json", "csv"])
+      .default("none")
+      .optional()
+      .describe("Store the response locally instead of returning it. Default is none. csv is only supported for get_symbol_series."),
+    output_file: z.string().optional().describe("File path for stored response."),
+    output_dir: z.string().optional().describe("Directory for stored response when output_file is not set."),
   };
 
   server.registerTool(
@@ -224,7 +232,14 @@ for (const tool of toolDefinitions) {
         };
       }
       try {
-        const { filter: filterExpr, ...apiArgs } = args;
+        const { filter: filterExpr, store, output_file, output_dir, ...apiArgs } = args;
+        const storeOptions = {
+          toolName: tool.name,
+          store,
+          output_file,
+          output_dir,
+        };
+        validateResponseStorage(storeOptions);
         const result = await client.request(
           tool.method,
           tool.pathTemplate,
@@ -236,6 +251,9 @@ for (const tool of toolDefinitions) {
           const expr = jsonata(filterExpr);
           output = await expr.evaluate(result);
         }
+
+        const stored = await storeResponse(output, storeOptions);
+        if (stored) output = stored;
 
         const content =
           typeof output === "string"

@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs, coerceArgs, buildHelp, buildToolHelp, runCli } from "../src/cli.js";
@@ -128,6 +128,8 @@ describe("buildToolHelp", () => {
     assert.ok(help.includes("--bar_type"));
     assert.ok(help.includes("--dp"));
     assert.ok(help.includes("--filter"));
+    assert.ok(help.includes("--store"));
+    assert.ok(help.includes("--output_file"));
   });
 
   it("marks optional params", () => {
@@ -216,6 +218,68 @@ describe("runCli", () => {
     const parsed = JSON.parse(output);
     assert.deepEqual(parsed, { symbols: [{ code: "NASDAQ:AAPL" }] });
     assert.equal(exitCode, undefined);
+  });
+
+  it("stores a normal tool response as JSON when requested", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-store-"));
+    const outputFile = path.join(outputDir, "symbols.json");
+
+    try {
+      const mockRequest = async () => ({ symbols: [{ code: "NASDAQ:AAPL" }] });
+      await runCli(
+        ["search_symbols", "--query", "apple", "--store", "json", "--output_file", outputFile],
+        { write, exit, request: mockRequest },
+      );
+
+      assert.deepEqual(JSON.parse(output), { stored_file: outputFile, format: "json" });
+      assert.deepEqual(JSON.parse(await readFile(outputFile, "utf8")), {
+        symbols: [{ code: "NASDAQ:AAPL" }],
+      });
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stores get_symbol_series as CSV when requested", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-store-"));
+    const outputFile = path.join(outputDir, "series.csv");
+
+    try {
+      const mockRequest = async () => ({
+        code: "NASDAQ:AAPL",
+        bar_type: "1D",
+        series: [{ time: 1, close: 10 }],
+      });
+      await runCli(
+        [
+          "get_symbol_series",
+          "--symbol", "NASDAQ:AAPL",
+          "--bar_type", "day",
+          "--store", "csv",
+          "--output_file", outputFile,
+        ],
+        { write, exit, request: mockRequest },
+      );
+
+      assert.deepEqual(JSON.parse(output), { stored_file: outputFile, format: "csv" });
+      assert.equal(await readFile(outputFile, "utf8"), "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n");
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects CSV storage for non-series tools before calling the API", async () => {
+    await runCli(
+      ["search_symbols", "--query", "apple", "--store", "csv", "--output_file", "symbols.csv"],
+      {
+        write,
+        exit,
+        request: async () => assert.fail("CSV storage should be rejected before request"),
+      },
+    );
+
+    assert.ok(output.includes("csv storage is only supported for get_symbol_series"));
+    assert.equal(exitCode, 1);
   });
 
   it("downloads history through the built-in command", async () => {

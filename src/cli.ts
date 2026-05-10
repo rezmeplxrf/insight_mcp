@@ -6,6 +6,7 @@ import { ApiClient } from "./api-client.js";
 import { toolDefinitions, type ToolDefinition } from "./tool-definitions.js";
 import { saveConfig, deleteConfig, resolveApiKey, getConfigLocation } from "./config.js";
 import { downloadHistory, type DownloadHistoryOptions } from "./history.js";
+import { storeResponse, validateResponseStorage, type ResponseStoreFormat } from "./response-storage.js";
 
 const DOWNLOAD_HISTORY_COMMAND = "download_history";
 
@@ -305,6 +306,9 @@ export function buildToolHelp(tool: ToolDefinition): string {
 
   // filter is always available
   lines.push(`  --${"filter".padEnd(24)} string [optional]  JSONata expression to transform the response`);
+  lines.push(`  --${"store".padEnd(24)} enum(none|json|csv) [optional]  Store the response instead of printing it. Default is none. csv is only for get_symbol_series.`);
+  lines.push(`  --${"output_file".padEnd(24)} string [optional]  File path for stored response.`);
+  lines.push(`  --${"output_dir".padEnd(24)} string [optional]  Directory for stored response when output_file is not set.`);
 
   const examples = toolExamples[tool.name];
   if (examples?.length) {
@@ -442,9 +446,22 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     return;
   }
 
-  const { filter: filterExpr, ...apiArgs } = coerceArgs(args, tool.schema);
+  const {
+    filter: filterExpr,
+    store,
+    output_dir,
+    output_file,
+    ...apiArgs
+  } = coerceArgs(args, tool.schema);
+  const storeOptions = {
+    toolName: tool.name,
+    store: store as ResponseStoreFormat | undefined,
+    output_dir,
+    output_file,
+  };
 
   try {
+    validateResponseStorage(storeOptions);
     let result = await request(tool.method, tool.pathTemplate, apiArgs);
 
     if (filterExpr && typeof filterExpr === "string") {
@@ -452,7 +469,10 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
       result = await expr.evaluate(result);
     }
 
-    const output = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+    const stored = await storeResponse(result, storeOptions);
+    const output = stored
+      ? JSON.stringify(stored, null, 2)
+      : typeof result === "string" ? result : JSON.stringify(result, null, 2);
     io.write(output);
   } catch (error: any) {
     io.write(`Error: ${error.message}\n`);
