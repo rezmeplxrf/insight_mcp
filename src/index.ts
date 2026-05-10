@@ -1,13 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import jsonata from "jsonata";
 import { ApiClient } from "./api-client.js";
 import { toolDefinitions } from "./tool-definitions.js";
 import { docResources } from "./resources.js";
 import { renderChart } from "./chart.js";
 import { downloadHistory } from "./history.js";
-import { storeResponse, validateResponseStorage } from "./response-storage.js";
+import { runApiTool } from "./tool-runner.js";
+import { flexibleInputSchema } from "./arg-coercion.js";
 
 const INSTRUCTIONS = `You are connected to the InsightSentry financial data API. You have access to real-time and historical market data for equities, futures, options, crypto, forex, and more.
 
@@ -205,7 +205,7 @@ const server = new McpServer(
 // Register all API tools with Zod schemas for type-safe parameter validation
 for (const tool of toolDefinitions) {
   const schema = {
-    ...tool.schema,
+    ...flexibleInputSchema(tool.schema),
     filter: z.string().describe("(Optional) JSONata expression to filter/transform the API response server-side before it reaches you. Use this to extract only the fields or rows you need, reducing token usage. See https://jsonata.org for syntax.").optional(),
     store: z
       .enum(["none", "json", "csv"])
@@ -232,28 +232,13 @@ for (const tool of toolDefinitions) {
         };
       }
       try {
-        const { filter: filterExpr, store, output_file, output_dir, ...apiArgs } = args;
-        const storeOptions = {
+        const output = await runApiTool({
           toolName: tool.name,
-          store,
-          output_file,
-          output_dir,
-        };
-        validateResponseStorage(storeOptions);
-        const result = await client.request(
-          tool.method,
-          tool.pathTemplate,
-          apiArgs,
-        );
-
-        let output = result;
-        if (filterExpr && typeof filterExpr === "string") {
-          const expr = jsonata(filterExpr);
-          output = await expr.evaluate(result);
-        }
-
-        const stored = await storeResponse(output, storeOptions);
-        if (stored) output = stored;
+          method: tool.method,
+          pathTemplate: tool.pathTemplate,
+          args,
+          request: (method, pathTemplate, params) => client.request(method, pathTemplate, params),
+        });
 
         const content =
           typeof output === "string"
@@ -280,7 +265,7 @@ server.registerTool(
   {
     description:
       "Download historical data over a from/to date range and save files locally as JSON, CSV, or both. second bars create one /history request per day, minute/hour bars create one /history request per month, and day/week/month bars use one /series request with dp=30000 and date filtering. Continuous futures ending in 1! or 2! are detected automatically and expanded to specific contract codes for second/minute/hour. Shows progress in the final summary and supports concurrency 1-10, default 5.",
-    inputSchema: {
+    inputSchema: flexibleInputSchema({
       symbol: z
         .string()
         .describe("Symbol code in EXCHANGE:SYMBOL format, e.g. NASDAQ:AAPL or CME_MINI:NQ1!"),
@@ -313,7 +298,7 @@ server.registerTool(
       dadj: z.boolean().optional(),
       badj: z.boolean().optional(),
       settlement: z.boolean().optional(),
-    },
+    }),
   },
   async (args: any) => {
     if (!client) {

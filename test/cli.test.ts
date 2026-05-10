@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs, coerceArgs, buildHelp, buildToolHelp, runCli } from "../src/cli.js";
@@ -75,8 +75,20 @@ describe("coerceArgs", () => {
     assert.equal(result.bar_interval, 5);
   });
 
+  it("leaves already typed numbers as numbers", () => {
+    const result = coerceArgs({ dp: 30, bar_interval: 5 }, seriesToolDef.schema);
+    assert.equal(result.dp, 30);
+    assert.equal(result.bar_interval, 5);
+  });
+
   it("coerces boolean strings to booleans", () => {
     const result = coerceArgs({ extended: "true", dadj: "false" }, seriesToolDef.schema);
+    assert.equal(result.extended, true);
+    assert.equal(result.dadj, false);
+  });
+
+  it("leaves already typed booleans as booleans", () => {
+    const result = coerceArgs({ extended: true, dadj: false }, seriesToolDef.schema);
     assert.equal(result.extended, true);
     assert.equal(result.dadj, false);
   });
@@ -194,14 +206,28 @@ describe("runCli", () => {
     }
   });
 
-  it("login without key shows usage", async () => {
-    await runCli(["login"], { write, exit });
+  it("login without key shows usage when non-interactive", async () => {
+    await runCli(["login"], { write, exit, isInteractive: false });
     assert.ok(output.includes("insight login --key"));
     assert.equal(exitCode, 1);
   });
 
   it("login with key saves config", async () => {
     await runCli(["login", "--key", "test-jwt-key"], { write, exit });
+    assert.ok(output.includes("API key saved"));
+    assert.equal(exitCode, 0);
+  });
+
+  it("login prompts for key when interactive", async () => {
+    const answers = new Map([["API key: ", "interactive-jwt-key"]]);
+
+    await runCli(["login"], {
+      write,
+      exit,
+      isInteractive: true,
+      prompt: async (question) => answers.get(question) ?? "",
+    });
+
     assert.ok(output.includes("API key saved"));
     assert.equal(exitCode, 0);
   });
@@ -220,6 +246,37 @@ describe("runCli", () => {
     assert.equal(exitCode, undefined);
   });
 
+  it("prompts for missing required tool arguments when interactive", async () => {
+    const answers = new Map([["Symbol: ", "NASDAQ:AAPL"]]);
+    const mockRequest = async (_method: string, _pathTemplate: string, params: Record<string, any>) => ({
+      code: params.symbol,
+    });
+
+    await runCli(["get_symbol_info"], {
+      write,
+      exit,
+      request: mockRequest,
+      isInteractive: true,
+      prompt: async (question) => answers.get(question) ?? "",
+    });
+
+    const parsed = JSON.parse(output);
+    assert.deepEqual(parsed, { code: "NASDAQ:AAPL" });
+    assert.equal(exitCode, undefined);
+  });
+
+  it("fails on missing required tool arguments when non-interactive", async () => {
+    await runCli(["get_symbol_info"], {
+      write,
+      exit,
+      isInteractive: false,
+      request: async () => assert.fail("missing required args should fail before request"),
+    });
+
+    assert.ok(output.includes("Missing required options for get_symbol_info: symbol"));
+    assert.equal(exitCode, 1);
+  });
+
   it("stores a normal tool response as JSON when requested", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-store-"));
     const outputFile = path.join(outputDir, "symbols.json");
@@ -235,6 +292,66 @@ describe("runCli", () => {
       assert.deepEqual(JSON.parse(await readFile(outputFile, "utf8")), {
         symbols: [{ code: "NASDAQ:AAPL" }],
       });
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stores the original JSON response when filter is also provided", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-store-"));
+    const outputFile = path.join(outputDir, "symbols.json");
+
+    try {
+      const mockRequest = async () => ({
+        symbols: [
+          { code: "NASDAQ:AAPL", name: "Apple" },
+          { code: "NASDAQ:MSFT", name: "Microsoft" },
+        ],
+      });
+      await runCli(
+        [
+          "search_symbols",
+          "--query", "apple",
+          "--filter", "symbols.code",
+          "--store", "json",
+          "--output_file", outputFile,
+        ],
+        { write, exit, request: mockRequest },
+      );
+
+      assert.deepEqual(JSON.parse(output), ["NASDAQ:AAPL", "NASDAQ:MSFT"]);
+      assert.deepEqual(JSON.parse(await readFile(outputFile, "utf8")), {
+        symbols: [
+          { code: "NASDAQ:AAPL", name: "Apple" },
+          { code: "NASDAQ:MSFT", name: "Microsoft" },
+        ],
+      });
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses request-specific filenames when storing to an output directory", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-store-"));
+
+    try {
+      const mockRequest = async (_method: string, _pathTemplate: string, params: Record<string, any>) => ({
+        symbols: [{ code: `NASDAQ:${String(params.query).toUpperCase()}` }],
+      });
+      await runCli(
+        ["search_symbols", "--query", "apple", "--store", "json", "--output_dir", outputDir],
+        { write, exit, request: mockRequest },
+      );
+      output = "";
+      await runCli(
+        ["search_symbols", "--query", "tesla", "--store", "json", "--output_dir", outputDir],
+        { write, exit, request: mockRequest },
+      );
+
+      const files = await readdir(outputDir);
+      assert.equal(files.length, 2);
+      assert.notEqual(files[0], files[1]);
+      assert.ok(files.every((file) => file.startsWith("search_symbols_") && file.endsWith(".json")));
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
@@ -262,6 +379,89 @@ describe("runCli", () => {
       );
 
       assert.deepEqual(JSON.parse(output), { stored_file: outputFile, format: "csv" });
+      assert.equal(await readFile(outputFile, "utf8"), "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n");
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prompts for an output file when storage is enabled interactively", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-store-"));
+    const outputFile = path.join(outputDir, "series.csv");
+    const answers = new Map([["Output file: ", outputFile]]);
+
+    try {
+      const mockRequest = async () => ({
+        code: "NASDAQ:AAPL",
+        bar_type: "1D",
+        series: [{ time: 1, close: 10 }],
+      });
+      await runCli(
+        [
+          "get_symbol_series",
+          "--symbol", "NASDAQ:AAPL",
+          "--bar_type", "day",
+          "--store", "csv",
+        ],
+        {
+          write,
+          exit,
+          isInteractive: true,
+          prompt: async (question) => answers.get(question) ?? "",
+          request: mockRequest,
+        },
+      );
+
+      assert.deepEqual(JSON.parse(output), { stored_file: outputFile, format: "csv" });
+      assert.equal(await readFile(outputFile, "utf8"), "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n");
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails before request when storage destination is missing non-interactively", async () => {
+    await runCli(
+      [
+        "get_symbol_series",
+        "--symbol", "NASDAQ:AAPL",
+        "--bar_type", "day",
+        "--store", "csv",
+      ],
+      {
+        write,
+        exit,
+        isInteractive: false,
+        request: async () => assert.fail("missing storage destination should fail before request"),
+      },
+    );
+
+    assert.ok(output.includes("output_file or output_dir is required"));
+    assert.equal(exitCode, 1);
+  });
+
+  it("stores the original series CSV when filter is also provided", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-store-"));
+    const outputFile = path.join(outputDir, "series.csv");
+
+    try {
+      const mockRequest = async () => ({
+        code: "NASDAQ:AAPL",
+        bar_type: "1D",
+        series: [{ time: 1, close: 10 }],
+      });
+      await runCli(
+        [
+          "get_symbol_series",
+          "--symbol", "NASDAQ:AAPL",
+          "--bar_type", "day",
+          "--filter", "series.close",
+          "--store", "csv",
+          "--output_file", outputFile,
+        ],
+        { write, exit, request: mockRequest },
+      );
+
+      assert.equal(JSON.parse(output), 10);
       assert.equal(await readFile(outputFile, "utf8"), "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n");
     } finally {
       await rm(outputDir, { recursive: true, force: true });

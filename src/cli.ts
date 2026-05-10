@@ -1,12 +1,18 @@
 import { z } from "zod";
-import jsonata from "jsonata";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { ApiClient } from "./api-client.js";
 import { toolDefinitions, type ToolDefinition } from "./tool-definitions.js";
 import { saveConfig, deleteConfig, resolveApiKey, getConfigLocation } from "./config.js";
 import { downloadHistory, type DownloadHistoryOptions } from "./history.js";
-import { storeResponse, validateResponseStorage, type ResponseStoreFormat } from "./response-storage.js";
+import { runApiTool } from "./tool-runner.js";
+import {
+  coerceArgs,
+  getZodEnumValues,
+  getZodTypeName,
+  isOptionalZodType,
+} from "./arg-coercion.js";
+export { coerceArgs } from "./arg-coercion.js";
 
 const DOWNLOAD_HISTORY_COMMAND = "download_history";
 
@@ -52,63 +58,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
   }
 
   return { toolName, args, help };
-}
-
-export function coerceArgs(
-  args: Record<string, string>,
-  schema: Record<string, z.ZodTypeAny>,
-): Record<string, any> {
-  const result: Record<string, any> = {};
-
-  for (const [key, value] of Object.entries(args)) {
-    const zodType = schema[key];
-    if (!zodType) {
-      result[key] = value;
-      continue;
-    }
-
-    const typeName = getZodTypeName(zodType);
-
-    if (typeName === "number") {
-      result[key] = Number(value);
-    } else if (typeName === "boolean") {
-      result[key] = value === "true";
-    } else if (typeName === "array") {
-      if (value.startsWith("[")) {
-        try {
-          result[key] = JSON.parse(value);
-          continue;
-        } catch { /* fall through to comma split */ }
-      }
-      result[key] = value.split(",").map((s) => s.trim());
-    } else {
-      result[key] = value;
-    }
-  }
-
-  return result;
-}
-
-/** Unwrap optional/default wrappers and return the base Zod def (works across Zod v3 and v4) */
-function resolveZodDef(t: z.ZodTypeAny): { type: string; def: any } {
-  const def = (t as any)._zod?.def ?? (t as any)._def ?? {};
-  const type: string = def.type ?? def.typeName ?? "";
-  if ((type === "optional" || type === "default") && def.innerType) {
-    return resolveZodDef(def.innerType);
-  }
-  return { type, def };
-}
-
-function getZodTypeName(t: z.ZodTypeAny): string {
-  return resolveZodDef(t).type;
-}
-
-function getZodEnumValues(t: z.ZodTypeAny): string[] {
-  const { type, def } = resolveZodDef(t);
-  if (type === "enum" && def.entries) {
-    return Object.values(def.entries) as string[];
-  }
-  return [];
 }
 
 export function buildHelp(): string {
@@ -298,7 +247,7 @@ export function buildToolHelp(tool: ToolDefinition): string {
   ];
 
   for (const [key, zodType] of Object.entries(tool.schema)) {
-    const optional = zodType.isOptional() ? " [optional]" : "";
+    const optional = isOptionalZodType(zodType) ? " [optional]" : "";
     const desc = getZodDescription(zodType);
     const typeName = formatTypeName(zodType);
     lines.push(`  --${key.padEnd(24)} ${typeName}${optional}  ${desc}`);
@@ -363,7 +312,7 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
 
   // Built-in commands
   if (toolName === "login") {
-    const key = args.key;
+    const key = await resolveLoginKey(args, io);
     if (!key) {
       io.write("Usage: insight login --key <your-api-key>\n\nGet your API key from https://insightsentry.com/dashboard");
       io.exit(1);
@@ -446,38 +395,38 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     return;
   }
 
-  const {
-    filter: filterExpr,
-    store,
-    output_dir,
-    output_file,
-    ...apiArgs
-  } = coerceArgs(args, tool.schema);
-  const storeOptions = {
-    toolName: tool.name,
-    store: store as ResponseStoreFormat | undefined,
-    output_dir,
-    output_file,
-  };
+  const resolvedArgs = await resolveToolArgs(args, tool, io);
+  if (!resolvedArgs) {
+    io.write(
+      `Error: Missing required options for ${tool.name}: ${missingToolArgs(args, tool).join(", ")}\n\nRun: insight ${tool.name} --help`,
+    );
+    io.exit(1);
+    return;
+  }
 
   try {
-    validateResponseStorage(storeOptions);
-    let result = await request(tool.method, tool.pathTemplate, apiArgs);
-
-    if (filterExpr && typeof filterExpr === "string") {
-      const expr = jsonata(filterExpr);
-      result = await expr.evaluate(result);
-    }
-
-    const stored = await storeResponse(result, storeOptions);
-    const output = stored
-      ? JSON.stringify(stored, null, 2)
-      : typeof result === "string" ? result : JSON.stringify(result, null, 2);
+    const outputValue = await runApiTool({
+      toolName: tool.name,
+      method: tool.method,
+      pathTemplate: tool.pathTemplate,
+      args: coerceArgs(resolvedArgs, tool.schema),
+      request,
+    });
+    const output =
+      typeof outputValue === "string" ? outputValue : JSON.stringify(outputValue, null, 2);
     io.write(output);
   } catch (error: any) {
     io.write(`Error: ${error.message}\n`);
     io.exit(1);
   }
+}
+
+async function resolveLoginKey(args: Record<string, string>, io: CliIO): Promise<string | null> {
+  if (args.key?.trim()) return args.key.trim();
+  if (io.isInteractive !== true || !io.prompt) return null;
+
+  const answer = (await io.prompt("API key: ")).trim();
+  return answer || null;
 }
 
 function resolveRequest(io: CliIO): RequestFn | null {
@@ -486,6 +435,57 @@ function resolveRequest(io: CliIO): RequestFn | null {
   if (!apiKey) return null;
   const client = new ApiClient(apiKey);
   return (method, path, params) => client.request(method, path, params);
+}
+
+function missingToolArgs(args: Record<string, string>, tool: ToolDefinition): string[] {
+  return Object.entries(tool.schema)
+    .filter(([_key, zodType]) => !isOptionalZodType(zodType))
+    .map(([key]) => key)
+    .filter((key) => !args[key]);
+}
+
+async function resolveToolArgs(
+  args: Record<string, string>,
+  tool: ToolDefinition,
+  io: CliIO,
+): Promise<Record<string, string> | null> {
+  const resolved = { ...args };
+  const missing = missingToolArgs(resolved, tool);
+  if (missing.length > 0) {
+    if (io.isInteractive !== true || !io.prompt) return null;
+
+    for (const key of missing) {
+      const answer = (await io.prompt(`${toolPromptLabel(key)}: `)).trim();
+      if (answer) resolved[key] = answer;
+    }
+
+    if (missingToolArgs(resolved, tool).length > 0) return null;
+  }
+
+  if (
+    io.isInteractive === true &&
+    io.prompt &&
+    isStoreEnabled(resolved.store) &&
+    !resolved.output_file &&
+    !resolved.output_dir
+  ) {
+    const answer = (await io.prompt("Output file: ")).trim();
+    if (answer) resolved.output_file = answer;
+  }
+
+  return resolved;
+}
+
+function isStoreEnabled(value: string | undefined): boolean {
+  return value === "json" || value === "csv";
+}
+
+function toolPromptLabel(key: string): string {
+  return key
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function missingDownloadHistoryArgs(args: Record<string, string>): RequiredDownloadHistoryArg[] {
