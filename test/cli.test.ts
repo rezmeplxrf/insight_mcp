@@ -7,6 +7,13 @@ import { buildHelp, buildToolHelp, coerceArgs, parseArgs, runCli } from "../src/
 import { loadConfig } from "../src/config.js";
 import { type ToolDefinition, toolDefinitions } from "../src/tool-definitions.js";
 
+function utcDateParts(date = new Date()): { day: string; month: string } {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return { day: `${year}-${month}-${day}`, month: `${year}-${month}` };
+}
+
 function jwt(payload: Record<string, unknown>): string {
   const encode = (value: unknown) =>
     Buffer.from(JSON.stringify(value)).toString("base64url").replace(/=+$/g, "");
@@ -147,6 +154,7 @@ describe("buildHelp", () => {
     assert.ok(help.includes("get_quotes"));
     assert.ok(help.includes("get_symbol_series"));
     assert.ok(help.includes("insight whoami"));
+    assert.ok(help.includes("insight update"));
   });
 
   it("describes filter as API-tool only", () => {
@@ -468,6 +476,37 @@ describe("runCli", () => {
     });
 
     assert.ok(output.includes("No API key found"));
+    assert.equal(exitCode, 1);
+  });
+
+  it("updates the global CLI package", async () => {
+    const commands: Array<{ command: string; args: string[] }> = [];
+
+    await runCli(["update"], {
+      write,
+      exit,
+      runCommand: async (command, args) => {
+        commands.push({ command, args });
+        return { stdout: "updated package", stderr: "" };
+      },
+    });
+
+    assert.deepEqual(commands, [{ command: "npm", args: ["install", "-g", "@insightsentry/mcp"] }]);
+    assert.ok(output.includes("Updating InsightSentry MCP CLI"));
+    assert.ok(output.includes("updated package"));
+    assert.equal(exitCode, 0);
+  });
+
+  it("reports update command failures", async () => {
+    await runCli(["update"], {
+      write,
+      exit,
+      runCommand: async () => {
+        throw new Error("npm is not available");
+      },
+    });
+
+    assert.ok(output.includes("Error: npm is not available"));
     assert.equal(exitCode, 1);
   });
 
@@ -1576,6 +1615,91 @@ describe("runCli", () => {
         ),
       );
       assert.ok(!questions.some((question) => question.includes("Filter")));
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("defaults the interactive download_history to month to the current month", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
+    const questions: string[] = [];
+    const { month: currentMonth } = utcDateParts();
+
+    try {
+      await runCli(["download_history"], {
+        write,
+        exit,
+        isInteractive: true,
+        prompt: async (question) => {
+          questions.push(question);
+          if (question.startsWith("Symbol")) return "NASDAQ:AAPL";
+          if (question.startsWith("Bar type")) return "minute";
+          if (question.startsWith("From")) return currentMonth;
+          if (question.startsWith("To")) return "";
+          if (question.startsWith("Output directory")) return outputDir;
+          return "";
+        },
+        request: async (_method, _pathTemplate, params) => {
+          assert.equal(params.start_date, currentMonth);
+          return {
+            code: "NASDAQ:AAPL",
+            bar_type: "1m",
+            series: [{ time: 1, close: 10 }],
+          };
+        },
+      });
+
+      const parsed = JSON.parse(output);
+      assert.equal(parsed.total, 1);
+      assert.equal(parsed.failed, 0);
+      assert.ok(
+        questions.some(
+          (question) =>
+            question.startsWith("To") &&
+            question.includes(`Default: ${currentMonth}`) &&
+            question.includes("press Enter to use default"),
+        ),
+      );
+      assert.equal(exitCode, undefined);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("defaults the interactive download_history second to the current date", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
+    const progress: string[] = [];
+    const { day: currentDay } = utcDateParts();
+
+    try {
+      await runCli(["download_history"], {
+        write,
+        exit,
+        isInteractive: true,
+        progress: (message) => progress.push(message),
+        prompt: async (question) => {
+          if (question.startsWith("Symbol")) return "NASDAQ:AAPL";
+          if (question.startsWith("Bar type")) return "second";
+          if (question.startsWith("From")) return currentDay;
+          if (question.startsWith("To")) return "";
+          if (question.startsWith("Output directory")) return outputDir;
+          return "";
+        },
+        request: async (_method, _pathTemplate, params) => {
+          assert.equal(params.start_date, currentDay);
+          return {
+            code: "NASDAQ:AAPL",
+            bar_type: "1S",
+            series: [{ time: 1, close: 10 }],
+          };
+        },
+      });
+
+      const parsed = JSON.parse(output);
+      assert.equal(parsed.total, 1);
+      assert.equal(parsed.failed, 0);
+      assert.ok(progress.some((message) => message.includes(`saved NASDAQ:AAPL ${currentDay}`)));
+      assert.equal(exitCode, undefined);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }

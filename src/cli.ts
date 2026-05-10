@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { stdin as input, stdout as output } from "node:process";
 import { emitKeypressEvents } from "node:readline";
 import { createInterface } from "node:readline/promises";
+import { promisify } from "node:util";
 import { z } from "zod";
 import { ApiClient } from "./api-client.js";
 import { coerceArgs, getZodEnumValues, getZodTypeName, isOptionalZodType } from "./arg-coercion.js";
@@ -26,7 +28,9 @@ import { runApiTool, validateFilterExpression } from "./tool-runner.js";
 export { coerceArgs } from "./arg-coercion.js";
 
 const DOWNLOAD_HISTORY_COMMAND = "download_history";
+const UPDATE_COMMAND = "update";
 const MAX_INTERACTIVE_PROMPT_ATTEMPTS = 3;
+const execFileAsync = promisify(execFile);
 const STORAGE_DESTINATION_SCHEMA: Record<"output_file" | "output_dir", z.ZodTypeAny> = {
   output_file: z.string().describe("File path for stored response.").optional(),
   output_dir: z
@@ -133,6 +137,7 @@ export function buildHelp(): string {
   lines.push("  insight login --key <your-api-key>    Save API key (persisted across sessions)");
   lines.push("  insight whoami                        Print the logged-in user's email");
   lines.push("  insight logout                        Remove saved API key");
+  lines.push("  insight update                        Update this CLI with npm");
   lines.push("");
   lines.push(
     "  Or set INSIGHTSENTRY_API_KEY environment variable (takes priority over saved key).",
@@ -338,12 +343,17 @@ type RequestFn = (
   pathTemplate: string,
   params: Record<string, any>,
 ) => Promise<any>;
+type RunCommandFn = (
+  command: string,
+  args: string[],
+) => Promise<{ stdout?: string; stderr?: string }>;
 
 interface CliIO {
   write: (s: string) => void;
   exit: (code: number) => void;
   request?: RequestFn;
   createRequestFromApiKey?: (apiKey: string) => RequestFn;
+  runCommand?: RunCommandFn;
   progress?: (s: string) => void;
   prompt?: (question: string) => Promise<string>;
   selectTool?: (options: ToolSelectionOption[]) => Promise<string | null>;
@@ -416,6 +426,11 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     deleteConfig();
     io.write(`API key removed from ${getConfigLocation()}`);
     io.exit(0);
+    return;
+  }
+
+  if (toolName === UPDATE_COMMAND) {
+    await runUpdateCommand(io);
     return;
   }
 
@@ -633,6 +648,28 @@ async function resolveInteractiveToolName(io: CliIO): Promise<InteractiveToolRes
 
   io.write("No tool selected.");
   return null;
+}
+
+async function runUpdateCommand(io: CliIO): Promise<void> {
+  const runCommand = io.runCommand ?? defaultRunCommand;
+  io.write("Updating InsightSentry MCP CLI with: npm install -g @insightsentry/mcp");
+  try {
+    const result = await runCommand("npm", ["install", "-g", "@insightsentry/mcp"]);
+    const details = [result.stdout?.trim(), result.stderr?.trim()].filter(Boolean).join("\n");
+    if (details) io.write(details);
+    io.write("InsightSentry MCP CLI updated.");
+    io.exit(0);
+  } catch (error: any) {
+    io.write(`Error: ${error?.message ?? String(error)}`);
+    io.exit(1);
+  }
+}
+
+async function defaultRunCommand(
+  command: string,
+  args: string[],
+): Promise<{ stdout?: string; stderr?: string }> {
+  return execFileAsync(command, args);
 }
 
 function interactiveToolOptions(): ToolSelectionOption[] {
@@ -953,7 +990,11 @@ async function resolveDownloadHistoryArgs(
   for (const [key, zodType] of Object.entries(downloadHistorySchema)) {
     if (resolved[key] !== undefined) continue;
     if (REQUIRED_DOWNLOAD_HISTORY_ARGS.includes(key as RequiredDownloadHistoryArg)) {
-      const answer = await promptForDownloadHistoryArg(key as RequiredDownloadHistoryArg, io);
+      const answer = await promptForDownloadHistoryArg(
+        key as RequiredDownloadHistoryArg,
+        resolved,
+        io,
+      );
       if (!answer) return null;
       resolved[key] = answer;
     } else {
@@ -1113,12 +1154,20 @@ function validateStoreMode(toolName: string, store: string | undefined): string 
 
 async function promptForDownloadHistoryArg(
   key: RequiredDownloadHistoryArg,
+  resolved: Record<string, string>,
   io: CliIO,
 ): Promise<string | null> {
   const label = downloadHistoryPromptLabel(key);
-  const question = promptQuestion(label, downloadHistorySchema[key], "required");
+  const defaultAnswer = getDownloadHistoryPromptDefault(key, resolved);
+  const question = defaultAnswer
+    ? promptQuestion(label, downloadHistorySchema[key], "required", {
+        blankInstruction: "press Enter to use default",
+        value: defaultAnswer,
+      })
+    : promptQuestion(label, downloadHistorySchema[key], "required");
   for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
-    const answer = (await io.prompt?.(question))?.trim() ?? "";
+    const rawAnswer = (await io.prompt?.(question))?.trim() ?? "";
+    const answer = rawAnswer || defaultAnswer || "";
     const error = validateDownloadHistoryArgAnswer(key, answer);
     if (error) {
       io.write(`Invalid ${label}: ${error}\n`);
@@ -1130,6 +1179,26 @@ async function promptForDownloadHistoryArg(
     io.write(`Invalid ${label}: ${storageError}\n`);
   }
   return null;
+}
+
+function getDownloadHistoryPromptDefault(
+  key: RequiredDownloadHistoryArg,
+  resolved: Record<string, string>,
+): string | null {
+  if (key !== "to") return null;
+  return resolved.bar_type === "second" ? currentUtcDay() : currentUtcMonth();
+}
+
+function currentUtcDay(date = new Date()): string {
+  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
+}
+
+function currentUtcMonth(date = new Date()): string {
+  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}`;
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
 }
 
 async function validateDownloadHistoryStorageAnswer(
@@ -1277,6 +1346,7 @@ function promptQuestion(
   label: string,
   zodType: z.ZodTypeAny,
   requirement: "required" | "optional",
+  defaultOverride?: { value: string; blankInstruction: string },
 ): string {
   const parts: string[] = [requirement];
   const enumValues = getZodEnumValues(zodType);
@@ -1286,11 +1356,15 @@ function promptQuestion(
     if (typeName && typeName !== "string") parts.push(`type: ${typeName}`);
   }
 
-  const defaultValue = getPromptDefault(zodType);
+  const defaultValue = defaultOverride?.value ?? getPromptDefault(zodType);
   if (defaultValue !== null) parts.push(`Default: ${defaultValue}`);
 
   const hint = getPromptHint(zodType);
-  if (requirement !== "required") parts.push("press Enter to skip");
+  if (defaultOverride) {
+    parts.push(defaultOverride.blankInstruction);
+  } else if (requirement !== "required") {
+    parts.push("press Enter to skip");
+  }
 
   const description = hint ? `${label}: ${hint}\n` : "";
   return `${description}${label} (${parts.join(", ")}): `;
