@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
-import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { validateHistoryBarInterval } from "./history-validation.js";
 
@@ -86,6 +86,8 @@ const CONTRACTS_PATH = "/v3/symbols/{symbol}/contracts";
 const DEFAULT_CONCURRENCY = 5;
 const MAX_CONCURRENCY = 10;
 const DEFAULT_CONTRACT_LOOKBACK_MONTHS = 6;
+const CHUNK_MARKER_SUFFIX = "insight-history-chunk";
+const MERGED_MARKER_SUFFIX = "insight-history-merged";
 const HISTORY_BAR_TYPES = ["second", "minute", "hour"] as const;
 const SERIES_BAR_TYPES = ["day", "week", "month"] as const;
 
@@ -125,6 +127,18 @@ export async function downloadHistory(
     files: [],
     errors: [],
   };
+
+  const existingMergedFile =
+    !options.overwrite && shouldMergeCsv && format === "csv"
+      ? await findExistingMergedCsv(options)
+      : null;
+  if (existingMergedFile) {
+    result.completed = result.total;
+    result.skipped = result.total;
+    result.merged_file = existingMergedFile;
+    result.files.push(existingMergedFile);
+    return result;
+  }
 
   let nextIndex = 0;
 
@@ -186,7 +200,7 @@ export async function downloadHistory(
 
         const outputBasePath = outputBasePathForResponse(request, response);
         const targetFiles = outputFilesForFormat(outputBasePath, format);
-        if (!options.overwrite && (await allFilesExist(targetFiles))) {
+        if (!options.overwrite && (await allFilesAreResumable(targetFiles))) {
           mergeCsvFilesByRequestIndex.set(
             requestIndex,
             targetFiles.filter((target) => target.endsWith(".csv")),
@@ -205,15 +219,15 @@ export async function downloadHistory(
         }
 
         for (const filePath of targetFiles) {
-          await mkdir(path.dirname(filePath), { recursive: true });
           if (filePath.endsWith(".csv")) {
-            await writeFile(filePath, responseToCsv(response), "utf8");
+            await writeFileAtomic(filePath, responseToCsv(response));
           } else {
-            await writeFile(filePath, `${JSON.stringify(response, null, 2)}\n`, "utf8");
+            await writeFileAtomic(filePath, `${JSON.stringify(response, null, 2)}\n`);
           }
           savedFiles.push(filePath);
           result.files.push(filePath);
           if (filePath.endsWith(".csv")) {
+            await writeChunkMarker(filePath);
             const csvFiles = mergeCsvFilesByRequestIndex.get(requestIndex) ?? [];
             csvFiles.push(filePath);
             mergeCsvFilesByRequestIndex.set(requestIndex, csvFiles);
@@ -259,13 +273,12 @@ export async function downloadHistory(
     if (orderedCsvFiles.length > 0) {
       const mergedFile = mergedCsvPath(options, path.basename(path.dirname(orderedCsvFiles[0])));
       await mergeCsvFiles(orderedCsvFiles, mergedFile);
+      await writeMergedMarker(mergedFile, options);
       result.merged_file = mergedFile;
       result.files.push(mergedFile);
       if (!options.keep_chunks) {
-        const removableCsvFiles = orderedCsvFiles.filter((filePath) =>
-          createdCsvFiles.has(filePath),
-        );
-        await removeChunkFiles(removableCsvFiles);
+        const removableCsvFiles = await filterRemovableChunkFiles(orderedCsvFiles, createdCsvFiles);
+        await removeChunkFilesAndMarkers(removableCsvFiles);
         result.files = result.files.filter((filePath) => !removableCsvFiles.includes(filePath));
       }
     }
@@ -684,7 +697,6 @@ function mergedCsvPath(options: DownloadHistoryOptions, barTypeLabel: string): s
 }
 
 async function mergeCsvFiles(files: string[], outputPath: string): Promise<void> {
-  await mkdir(path.dirname(outputPath), { recursive: true });
   const headers: string[] = [];
   const headerSet = new Set<string>();
   const rowsByKey = new Map<string, Record<string, string>>();
@@ -728,18 +740,56 @@ async function mergeCsvFiles(files: string[], outputPath: string): Promise<void>
     headers.map((header) => row[header] ?? ""),
   );
   const content = headers.length > 0 ? serializeCsvRows(headers, rows) : "";
-  await writeFile(outputPath, content, "utf8");
+  await writeFileAtomic(outputPath, content);
 }
 
-async function allFilesExist(files: string[]): Promise<boolean> {
+async function allFilesAreResumable(files: string[]): Promise<boolean> {
   for (const file of files) {
-    try {
-      await readFile(file);
-    } catch {
+    if (!(await isExistingOutputFileResumable(file))) {
       return false;
     }
   }
   return true;
+}
+
+async function isExistingOutputFileResumable(file: string): Promise<boolean> {
+  try {
+    const content = await readFile(file, "utf8");
+    if (file.endsWith(".csv")) {
+      if (!content.trim()) return await hasChunkMarker(file);
+      validateCsvContent(content);
+      return true;
+    }
+    if (file.endsWith(".json")) {
+      validateJsonContent(content);
+      return true;
+    }
+    return content.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function validateCsvContent(content: string): void {
+  if (!content.trim()) throw new Error("CSV output is empty");
+  const lines = content.split(/\r?\n/).filter((line) => line.length > 0);
+  if (lines.length < 2) throw new Error("CSV output has no data rows");
+
+  const columns = parseCsvLine(lines[0]);
+  const required = ["code", "bar_type", "time"];
+  for (const column of required) {
+    if (!columns.includes(column)) {
+      throw new Error(`CSV output is missing ${column} column`);
+    }
+  }
+  for (const line of lines.slice(1)) {
+    parseCsvLine(line);
+  }
+}
+
+function validateJsonContent(content: string): void {
+  if (!content.trim()) throw new Error("JSON output is empty");
+  JSON.parse(content);
 }
 
 async function findExistingTargetFiles(
@@ -763,12 +813,37 @@ async function findExistingTargetFiles(
       path.join(outputRoot, entry.name, outputName),
       format,
     );
-    if (await allFilesExist(candidateFiles)) return candidateFiles;
+    if (await allFilesAreResumable(candidateFiles)) return candidateFiles;
   }
   return null;
 }
 
-async function removeChunkFiles(files: string[]): Promise<void> {
+async function findExistingMergedCsv(options: DownloadHistoryOptions): Promise<string | null> {
+  const candidate = mergedCsvPath(options, timeframeLabel(options.bar_type, options.bar_interval));
+  if (!(await hasMatchingMergedMarker(candidate, options))) return null;
+  try {
+    const content = await readFile(candidate, "utf8");
+    if (content.trim()) validateCsvContent(content);
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
+async function filterRemovableChunkFiles(
+  files: string[],
+  createdCsvFiles: Set<string>,
+): Promise<string[]> {
+  const removable: string[] = [];
+  for (const file of files) {
+    if (createdCsvFiles.has(file) || (await hasChunkMarker(file))) {
+      removable.push(file);
+    }
+  }
+  return removable;
+}
+
+async function removeChunkFilesAndMarkers(files: string[]): Promise<void> {
   await Promise.all(
     files.map(async (file) => {
       try {
@@ -776,8 +851,91 @@ async function removeChunkFiles(files: string[]): Promise<void> {
       } catch (error: any) {
         if (error?.code !== "ENOENT") throw error;
       }
+      try {
+        await unlink(chunkMarkerPath(file));
+      } catch (error: any) {
+        if (error?.code !== "ENOENT") throw error;
+      }
     }),
   );
+}
+
+async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  try {
+    await writeFile(tempPath, content, "utf8");
+    await rename(tempPath, filePath);
+  } catch (error) {
+    try {
+      await unlink(tempPath);
+    } catch {
+      // Ignore cleanup errors; the original write/rename error is more useful.
+    }
+    throw error;
+  }
+}
+
+async function writeChunkMarker(filePath: string): Promise<void> {
+  await writeFileAtomic(chunkMarkerPath(filePath), "");
+}
+
+async function writeMergedMarker(filePath: string, options: DownloadHistoryOptions): Promise<void> {
+  await writeFileAtomic(
+    mergedMarkerPath(filePath),
+    `${JSON.stringify(historyRunSignature(options), null, 2)}\n`,
+  );
+}
+
+async function hasChunkMarker(filePath: string): Promise<boolean> {
+  try {
+    await readFile(chunkMarkerPath(filePath));
+    return true;
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function hasMatchingMergedMarker(
+  filePath: string,
+  options: DownloadHistoryOptions,
+): Promise<boolean> {
+  try {
+    const content = await readFile(mergedMarkerPath(filePath), "utf8");
+    return JSON.stringify(JSON.parse(content)) === JSON.stringify(historyRunSignature(options));
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return false;
+    if (error instanceof SyntaxError) return false;
+    throw error;
+  }
+}
+
+function chunkMarkerPath(filePath: string): string {
+  return path.join(path.dirname(filePath), `.${path.basename(filePath)}.${CHUNK_MARKER_SUFFIX}`);
+}
+
+function mergedMarkerPath(filePath: string): string {
+  return path.join(path.dirname(filePath), `.${path.basename(filePath)}.${MERGED_MARKER_SUFFIX}`);
+}
+
+function historyRunSignature(options: DownloadHistoryOptions): Record<string, unknown> {
+  return {
+    symbol: options.symbol,
+    from: options.from,
+    to: options.to,
+    bar_type: options.bar_type,
+    bar_interval: options.bar_interval ?? null,
+    contract_lookback_months: options.contract_lookback_months ?? DEFAULT_CONTRACT_LOOKBACK_MONTHS,
+    extended: options.extended ?? null,
+    dadj: options.dadj ?? null,
+    badj: options.badj ?? null,
+    split: options.split ?? null,
+    settlement: options.settlement ?? null,
+  };
 }
 
 function serializeCsvRows(headers: string[], rows: any[][]): string {
@@ -819,6 +977,10 @@ function parseCsvLine(line: string): string[] {
       continue;
     }
     current += char;
+  }
+
+  if (inQuotes) {
+    throw new Error("CSV line has an unterminated quoted field");
   }
 
   cells.push(current);

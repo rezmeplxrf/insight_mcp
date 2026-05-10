@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -630,6 +630,179 @@ describe("downloadHistory", () => {
         await readFile(chunkPath, "utf8"),
         "code,bar_type,time,close\nNASDAQ:AAPL,1m,1,10\n",
       );
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refetches malformed existing CSV chunks instead of treating them as resumable", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
+    const chunkPath = path.join(outputDir, "NASDAQ_AAPL", "1m", "2024-01.csv");
+    let requestCount = 0;
+
+    try {
+      await mkdir(path.dirname(chunkPath), { recursive: true });
+      await writeFile(chunkPath, 'code,bar_type,time,close\nNASDAQ:AAPL,1m,"1,10\n', "utf8");
+
+      const result = await downloadHistory(
+        {
+          symbol: "NASDAQ:AAPL",
+          from: "2024-01",
+          to: "2024-01",
+          bar_type: "minute",
+          output_dir: outputDir,
+          format: "csv",
+        },
+        {
+          request: async (_method, _pathTemplate, params) => {
+            requestCount += 1;
+            return {
+              code: params.symbol,
+              bar_type: "1m",
+              series: [{ time: 1, close: 10 }],
+            };
+          },
+        },
+      );
+
+      assert.equal(requestCount, 1);
+      assert.equal(
+        await readFile(requireMergedFile(result), "utf8"),
+        "code,bar_type,time,close\nNASDAQ:AAPL,1m,1,10\n",
+      );
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses an existing valid merged CSV as a completed resumed run", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
+
+    try {
+      const first = await downloadHistory(
+        {
+          symbol: "NASDAQ:AAPL",
+          from: "2024-01",
+          to: "2024-01",
+          bar_type: "minute",
+          output_dir: outputDir,
+          format: "csv",
+        },
+        {
+          request: async () => ({
+            code: "NASDAQ:AAPL",
+            bar_type: "1m",
+            series: [{ time: 1, close: 10 }],
+          }),
+        },
+      );
+
+      const result = await downloadHistory(
+        {
+          symbol: "NASDAQ:AAPL",
+          from: "2024-01",
+          to: "2024-01",
+          bar_type: "minute",
+          output_dir: outputDir,
+          format: "csv",
+        },
+        {
+          request: async () => assert.fail("existing merged CSV should be reused without fetching"),
+        },
+      );
+
+      assert.equal(result.completed, 1);
+      assert.equal(result.skipped, 1);
+      assert.equal(result.failed, 0);
+      assert.equal(result.merged_file, first.merged_file);
+      assert.deepEqual(result.files, [first.merged_file]);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reuse an existing merged CSV for a different requested range", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
+    const calls: string[] = [];
+
+    try {
+      await downloadHistory(
+        {
+          symbol: "NASDAQ:AAPL",
+          from: "2024-01",
+          to: "2024-01",
+          bar_type: "minute",
+          output_dir: outputDir,
+          format: "csv",
+        },
+        {
+          request: async (_method, _pathTemplate, params) => ({
+            code: params.symbol,
+            bar_type: "1m",
+            series: [{ time: 1, close: 10 }],
+          }),
+        },
+      );
+
+      await downloadHistory(
+        {
+          symbol: "NASDAQ:AAPL",
+          from: "2024-01",
+          to: "2024-02",
+          bar_type: "minute",
+          output_dir: outputDir,
+          format: "csv",
+        },
+        {
+          request: async (_method, _pathTemplate, params) => {
+            calls.push(String(params.start_date));
+            return {
+              code: params.symbol,
+              bar_type: "1m",
+              series: [{ time: params.start_date === "2024-01" ? 1 : 2, close: 10 }],
+            };
+          },
+        },
+      );
+
+      assert.deepEqual(calls.sort(), ["2024-01", "2024-02"]);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes resumed tool-created chunk files after merging when keep_chunks is false", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
+    const chunkPath = path.join(outputDir, "NASDAQ_AAPL", "1m", "2024-01.csv");
+    const markerPath = path.join(
+      outputDir,
+      "NASDAQ_AAPL",
+      "1m",
+      ".2024-01.csv.insight-history-chunk",
+    );
+
+    try {
+      await mkdir(path.dirname(chunkPath), { recursive: true });
+      await writeFile(chunkPath, "code,bar_type,time,close\nNASDAQ:AAPL,1m,1,10\n", "utf8");
+      await writeFile(markerPath, "", "utf8");
+
+      const result = await downloadHistory(
+        {
+          symbol: "NASDAQ:AAPL",
+          from: "2024-01",
+          to: "2024-01",
+          bar_type: "minute",
+          output_dir: outputDir,
+          format: "csv",
+        },
+        {
+          request: async () => assert.fail("marked chunk should be reused without fetching"),
+        },
+      );
+
+      assert.deepEqual(result.files, [result.merged_file]);
+      await assert.rejects(() => readFile(chunkPath, "utf8"), /ENOENT/);
+      await assert.rejects(() => readFile(markerPath, "utf8"), /ENOENT/);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
