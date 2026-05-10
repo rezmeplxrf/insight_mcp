@@ -1,7 +1,7 @@
 {
   "name": "@insightsentry/mcp",
   "mcpName": "io.github.rezmeplxrf/insightsentry_mcp",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "MCP server for InsightSentry financial data API - provides AI-accessible tools for market data, screening, options, and comprehensive API documentation resources",
   "type": "module",
   "main": "dist/index.js",
@@ -17,6 +17,12 @@
   "scripts": {
     "generate": "tsx scripts/generate.ts",
     "build": "npm run generate && tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "check": "npm run lint && npm run typecheck && npm test",
     "dev": "tsx src/index.ts",
     "deploy": "npm run build && npm publish --access public",
     "deploy:mcp": "mcp-publisher publish",
@@ -45,6 +51,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.10",
     "@types/node": "^22.19.17",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3"

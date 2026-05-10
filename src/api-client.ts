@@ -6,15 +6,10 @@ const SYMBOL_CODE_PATTERN = /^[A-Z0-9_./-]+:[A-Z0-9_./!-]+$/;
 // Parameter names that expect a symbol code
 const SYMBOL_PARAM_NAMES = new Set(["symbol", "code", "codes"]);
 
-function validateSymbolParams(
-  params: Record<string, any>,
-): string | null {
+function validateSymbolParams(params: Record<string, any>): string | null {
   for (const [key, value] of Object.entries(params)) {
     if (!SYMBOL_PARAM_NAMES.has(key) || !value) continue;
-    const codes =
-      key === "codes"
-        ? String(value).split(",")
-        : [String(value)];
+    const codes = key === "codes" ? String(value).split(",") : [String(value)];
     for (const code of codes) {
       const trimmed = code.trim();
       if (!SYMBOL_CODE_PATTERN.test(trimmed)) {
@@ -36,11 +31,7 @@ export class ApiClient {
     this.apiKey = apiKey;
   }
 
-  async request(
-    method: string,
-    pathTemplate: string,
-    params: Record<string, any>,
-  ): Promise<any> {
+  async request(method: string, pathTemplate: string, params: Record<string, any>): Promise<any> {
     // Validate symbol codes before making the request
     const symbolError = validateSymbolParams(params);
     if (symbolError) {
@@ -48,9 +39,7 @@ export class ApiClient {
     }
 
     // Separate path params from query/body params
-    const pathParamNames = [
-      ...pathTemplate.matchAll(/\{(\w+)\}/g),
-    ].map((m) => m[1]);
+    const pathParamNames = [...pathTemplate.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
 
     let path = pathTemplate;
     const remaining: Record<string, any> = {};
@@ -92,14 +81,11 @@ export class ApiClient {
       let errorMessage: string;
       try {
         const errorJson = JSON.parse(text);
-        errorMessage =
-          errorJson.message || errorJson.error || JSON.stringify(errorJson);
+        errorMessage = errorJson.message || errorJson.error || JSON.stringify(errorJson);
       } catch {
         errorMessage = text || `HTTP ${response.status} ${response.statusText}`;
       }
-      throw new Error(
-        `API error (${response.status}): ${errorMessage}`,
-      );
+      throw new Error(`API error (${response.status}): ${errorMessage}`);
     }
 
     const contentType = response.headers.get("content-type") || "";

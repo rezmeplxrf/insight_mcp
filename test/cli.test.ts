@@ -1,10 +1,16 @@
-import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { parseArgs, coerceArgs, buildHelp, buildToolHelp, runCli } from "../src/cli.js";
-import { toolDefinitions } from "../src/tool-definitions.js";
+import { beforeEach, describe, it } from "node:test";
+import { buildHelp, buildToolHelp, coerceArgs, parseArgs, runCli } from "../src/cli.js";
+import { type ToolDefinition, toolDefinitions } from "../src/tool-definitions.js";
+
+function findTool(name: string): ToolDefinition {
+  const tool = toolDefinitions.find((candidate) => candidate.name === name);
+  assert.ok(tool, `tool ${name} should exist`);
+  return tool;
+}
 
 describe("parseArgs", () => {
   it("parses tool name and flags", () => {
@@ -29,10 +35,14 @@ describe("parseArgs", () => {
   it("parses multiple flags", () => {
     const result = parseArgs([
       "get_symbol_series",
-      "--symbol", "NASDAQ:AAPL",
-      "--bar_type", "day",
-      "--dp", "30",
-      "--filter", "series[-1].close",
+      "--symbol",
+      "NASDAQ:AAPL",
+      "--bar_type",
+      "day",
+      "--dp",
+      "30",
+      "--filter",
+      "series[-1].close",
     ]);
     assert.equal(result.toolName, "get_symbol_series");
     assert.deepEqual(result.args, {
@@ -67,7 +77,7 @@ describe("parseArgs", () => {
 });
 
 describe("coerceArgs", () => {
-  const seriesToolDef = toolDefinitions.find((t) => t.name === "get_symbol_series")!;
+  const seriesToolDef = findTool("get_symbol_series");
 
   it("coerces number strings to numbers", () => {
     const result = coerceArgs({ dp: "30", bar_interval: "5" }, seriesToolDef.schema);
@@ -100,7 +110,7 @@ describe("coerceArgs", () => {
   });
 
   it("coerces JSON arrays", () => {
-    const screenerDef = toolDefinitions.find((t) => t.name === "screen_stocks")!;
+    const screenerDef = findTool("screen_stocks");
     const result = coerceArgs(
       { fields: '["close","volume"]', exchanges: '["NYSE"]' },
       screenerDef.schema,
@@ -110,7 +120,7 @@ describe("coerceArgs", () => {
   });
 
   it("coerces comma-separated values to arrays", () => {
-    const screenerDef = toolDefinitions.find((t) => t.name === "screen_stocks")!;
+    const screenerDef = findTool("screen_stocks");
     const result = coerceArgs({ fields: "close,volume" }, screenerDef.schema);
     assert.deepEqual(result.fields, ["close", "volume"]);
   });
@@ -133,7 +143,7 @@ describe("buildHelp", () => {
 
 describe("buildToolHelp", () => {
   it("shows tool params", () => {
-    const tool = toolDefinitions.find((t) => t.name === "get_symbol_series")!;
+    const tool = findTool("get_symbol_series");
     const help = buildToolHelp(tool);
     assert.ok(help.includes("get_symbol_series"));
     assert.ok(help.includes("--symbol"));
@@ -145,13 +155,13 @@ describe("buildToolHelp", () => {
   });
 
   it("marks optional params", () => {
-    const tool = toolDefinitions.find((t) => t.name === "get_symbol_series")!;
+    const tool = findTool("get_symbol_series");
     const help = buildToolHelp(tool);
     assert.ok(help.includes("[optional]"));
   });
 
   it("shows tool with no params", () => {
-    const tool = toolDefinitions.find((t) => t.name === "get_fundamentals_meta")!;
+    const tool = findTool("get_fundamentals_meta");
     const help = buildToolHelp(tool);
     assert.ok(help.includes("get_fundamentals_meta"));
     assert.ok(help.includes("--filter"));
@@ -161,8 +171,12 @@ describe("buildToolHelp", () => {
 describe("runCli", () => {
   let output: string;
   let exitCode: number | undefined;
-  const write = (s: string) => { output += s; };
-  const exit = (code: number) => { exitCode = code; };
+  const write = (s: string) => {
+    output += s;
+  };
+  const exit = (code: number) => {
+    exitCode = code;
+  };
 
   beforeEach(() => {
     output = "";
@@ -248,7 +262,11 @@ describe("runCli", () => {
 
   it("prompts for missing required tool arguments when interactive", async () => {
     const answers = new Map([["Symbol: ", "NASDAQ:AAPL"]]);
-    const mockRequest = async (_method: string, _pathTemplate: string, params: Record<string, any>) => ({
+    const mockRequest = async (
+      _method: string,
+      _pathTemplate: string,
+      params: Record<string, any>,
+    ) => ({
       code: params.symbol,
     });
 
@@ -311,10 +329,14 @@ describe("runCli", () => {
       await runCli(
         [
           "search_symbols",
-          "--query", "apple",
-          "--filter", "symbols.code",
-          "--store", "json",
-          "--output_file", outputFile,
+          "--query",
+          "apple",
+          "--filter",
+          "symbols.code",
+          "--store",
+          "json",
+          "--output_file",
+          outputFile,
         ],
         { write, exit, request: mockRequest },
       );
@@ -335,7 +357,11 @@ describe("runCli", () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-store-"));
 
     try {
-      const mockRequest = async (_method: string, _pathTemplate: string, params: Record<string, any>) => ({
+      const mockRequest = async (
+        _method: string,
+        _pathTemplate: string,
+        params: Record<string, any>,
+      ) => ({
         symbols: [{ code: `NASDAQ:${String(params.query).toUpperCase()}` }],
       });
       await runCli(
@@ -351,7 +377,9 @@ describe("runCli", () => {
       const files = await readdir(outputDir);
       assert.equal(files.length, 2);
       assert.notEqual(files[0], files[1]);
-      assert.ok(files.every((file) => file.startsWith("search_symbols_") && file.endsWith(".json")));
+      assert.ok(
+        files.every((file) => file.startsWith("search_symbols_") && file.endsWith(".json")),
+      );
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
@@ -370,16 +398,23 @@ describe("runCli", () => {
       await runCli(
         [
           "get_symbol_series",
-          "--symbol", "NASDAQ:AAPL",
-          "--bar_type", "day",
-          "--store", "csv",
-          "--output_file", outputFile,
+          "--symbol",
+          "NASDAQ:AAPL",
+          "--bar_type",
+          "day",
+          "--store",
+          "csv",
+          "--output_file",
+          outputFile,
         ],
         { write, exit, request: mockRequest },
       );
 
       assert.deepEqual(JSON.parse(output), { stored_file: outputFile, format: "csv" });
-      assert.equal(await readFile(outputFile, "utf8"), "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n");
+      assert.equal(
+        await readFile(outputFile, "utf8"),
+        "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n",
+      );
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
@@ -397,12 +432,7 @@ describe("runCli", () => {
         series: [{ time: 1, close: 10 }],
       });
       await runCli(
-        [
-          "get_symbol_series",
-          "--symbol", "NASDAQ:AAPL",
-          "--bar_type", "day",
-          "--store", "csv",
-        ],
+        ["get_symbol_series", "--symbol", "NASDAQ:AAPL", "--bar_type", "day", "--store", "csv"],
         {
           write,
           exit,
@@ -413,7 +443,10 @@ describe("runCli", () => {
       );
 
       assert.deepEqual(JSON.parse(output), { stored_file: outputFile, format: "csv" });
-      assert.equal(await readFile(outputFile, "utf8"), "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n");
+      assert.equal(
+        await readFile(outputFile, "utf8"),
+        "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n",
+      );
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
@@ -421,12 +454,7 @@ describe("runCli", () => {
 
   it("fails before request when storage destination is missing non-interactively", async () => {
     await runCli(
-      [
-        "get_symbol_series",
-        "--symbol", "NASDAQ:AAPL",
-        "--bar_type", "day",
-        "--store", "csv",
-      ],
+      ["get_symbol_series", "--symbol", "NASDAQ:AAPL", "--bar_type", "day", "--store", "csv"],
       {
         write,
         exit,
@@ -452,17 +480,25 @@ describe("runCli", () => {
       await runCli(
         [
           "get_symbol_series",
-          "--symbol", "NASDAQ:AAPL",
-          "--bar_type", "day",
-          "--filter", "series.close",
-          "--store", "csv",
-          "--output_file", outputFile,
+          "--symbol",
+          "NASDAQ:AAPL",
+          "--bar_type",
+          "day",
+          "--filter",
+          "series.close",
+          "--store",
+          "csv",
+          "--output_file",
+          outputFile,
         ],
         { write, exit, request: mockRequest },
       );
 
       assert.equal(JSON.parse(output), 10);
-      assert.equal(await readFile(outputFile, "utf8"), "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n");
+      assert.equal(
+        await readFile(outputFile, "utf8"),
+        "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n",
+      );
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
@@ -489,13 +525,20 @@ describe("runCli", () => {
       await runCli(
         [
           "download_history",
-          "--symbol", "NASDAQ:AAPL",
-          "--bar_type", "minute",
-          "--from", "2024-01",
-          "--to", "2024-01",
-          "--output_dir", outputDir,
-          "--format", "json",
-          "--merge", "true",
+          "--symbol",
+          "NASDAQ:AAPL",
+          "--bar_type",
+          "minute",
+          "--from",
+          "2024-01",
+          "--to",
+          "2024-01",
+          "--output_dir",
+          outputDir,
+          "--format",
+          "json",
+          "--merge",
+          "true",
         ],
         {
           write,
@@ -566,16 +609,19 @@ describe("runCli", () => {
         { code: "NASDAQ:MSFT", name: "Microsoft" },
       ],
     });
-    await runCli(
-      ["search_symbols", "--query", "a", "--filter", "symbols.code"],
-      { write, exit, request: mockRequest },
-    );
+    await runCli(["search_symbols", "--query", "a", "--filter", "symbols.code"], {
+      write,
+      exit,
+      request: mockRequest,
+    });
     const parsed = JSON.parse(output);
     assert.deepEqual(parsed, ["NASDAQ:AAPL", "NASDAQ:MSFT"]);
   });
 
   it("handles API errors", async () => {
-    const mockRequest = async () => { throw new Error("API error (401): Unauthorized"); };
+    const mockRequest = async () => {
+      throw new Error("API error (401): Unauthorized");
+    };
     await runCli(["search_symbols", "--query", "x"], { write, exit, request: mockRequest });
     assert.ok(output.includes("Unauthorized"));
     assert.equal(exitCode, 1);

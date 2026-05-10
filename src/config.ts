@@ -1,6 +1,6 @@
-import { homedir, platform } from "os";
-import { join } from "path";
-import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from "fs";
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir, platform } from "node:os";
+import { join } from "node:path";
 
 interface Config {
   apiKey?: string;
@@ -33,7 +33,7 @@ export function loadConfig(): Config {
 export function saveConfig(config: Config): void {
   const dir = getConfigDir();
   mkdirSync(dir, { recursive: true });
-  writeFileSync(getConfigPath(), JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+  writeFileSync(getConfigPath(), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 }
 
 export function deleteConfig(): void {

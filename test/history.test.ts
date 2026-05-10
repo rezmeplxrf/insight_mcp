@@ -1,13 +1,14 @@
+import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import assert from "node:assert/strict";
-import {
-  downloadHistory,
-  planHistoryRequests,
-  responseToCsv,
-} from "../src/history.js";
+import { downloadHistory, planHistoryRequests, responseToCsv } from "../src/history.js";
+
+function requireMergedFile(result: { merged_file?: string }): string {
+  assert.ok(result.merged_file);
+  return result.merged_file;
+}
 
 describe("planHistoryRequests", () => {
   it("plans one monthly request per month for minute and hour history", async () => {
@@ -157,13 +158,16 @@ describe("planHistoryRequests", () => {
       );
 
       assert.equal(plan.mode, "regular");
-      assert.deepEqual(plan.requests.map((request) => request.params), [
-        {
-          symbol: "NASDAQ:AAPL",
-          bar_type,
-          dp: 30000,
-        },
-      ]);
+      assert.deepEqual(
+        plan.requests.map((request) => request.params),
+        [
+          {
+            symbol: "NASDAQ:AAPL",
+            bar_type,
+            dp: 30000,
+          },
+        ],
+      );
     }
   });
 
@@ -295,8 +299,7 @@ describe("downloadHistory", () => {
         firstCsv,
         "code,bar_type,time,open,high,low,close,volume\nNASDAQ:AAPL,1m,1,10,11,9,10.5,100\n",
       );
-      assert.ok(result.merged_file);
-      const mergedCsv = await readFile(result.merged_file!, "utf8");
+      const mergedCsv = await readFile(requireMergedFile(result), "utf8");
       assert.equal(
         mergedCsv,
         "code,bar_type,time,open,high,low,close,volume\nNASDAQ:AAPL,1m,1,10,11,9,10.5,100\nNASDAQ:AAPL,1m,2,10,11,9,10.5,100\n",
@@ -474,7 +477,7 @@ describe("downloadHistory", () => {
           params: { symbol: "NASDAQ:AAPL", bar_type: "day", dp: 30000 },
         },
       ]);
-      const mergedCsv = await readFile(result.merged_file!, "utf8");
+      const mergedCsv = await readFile(requireMergedFile(result), "utf8");
       assert.equal(
         mergedCsv,
         `code,bar_type,time,close\nNASDAQ:AAPL,1D,${Date.UTC(2024, 0, 2) / 1000},10\nNASDAQ:AAPL,1D,${Date.UTC(2024, 0, 3) / 1000},11\n`,
@@ -509,7 +512,7 @@ describe("downloadHistory", () => {
         },
       );
 
-      const mergedCsv = await readFile(result.merged_file!, "utf8");
+      const mergedCsv = await readFile(requireMergedFile(result), "utf8");
       assert.equal(
         mergedCsv,
         "code,bar_type,time,close\nNASDAQ:AAPL,1m,1,99\nNASDAQ:AAPL,1m,2,20\nNASDAQ:AAPL,1m,3,20\n",
@@ -592,7 +595,7 @@ describe("downloadHistory", () => {
         },
       );
 
-      const mergedCsv = await readFile(result.merged_file!, "utf8");
+      const mergedCsv = await readFile(requireMergedFile(result), "utf8");
       assert.equal(
         mergedCsv,
         "code,bar_type,time,close,volume\nNASDAQ:AAPL,1m,1,10,\nNASDAQ:AAPL,1m,2,20,200\n",

@@ -1,5 +1,9 @@
 import jsonata from "jsonata";
-import { storeResponse, validateResponseStorage, type ResponseStoreFormat } from "./response-storage.js";
+import {
+  type ResponseStoreFormat,
+  storeResponse,
+  validateResponseStorage,
+} from "./response-storage.js";
 
 export type ApiToolRequestFn = (
   method: string,

@@ -1,5 +1,5 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { describe, it } from "node:test";
 import { z } from "zod";
 import { coerceArgs, flexibleInputSchema } from "../src/arg-coercion.js";
 
@@ -24,7 +24,7 @@ describe("arg coercion", () => {
   });
 
   it("accepts arrays as JSON strings, comma strings, or arrays", () => {
-    assert.deepEqual(coerceArgs({ fields: "[\"close\",\"volume\"]" }, schema), {
+    assert.deepEqual(coerceArgs({ fields: '["close","volume"]' }, schema), {
       fields: ["close", "volume"],
     });
     assert.deepEqual(coerceArgs({ fields: "close,volume" }, schema), {
@@ -38,18 +38,24 @@ describe("arg coercion", () => {
   it("lets MCP schemas parse string and typed inputs equivalently", () => {
     const flexible = z.object(flexibleInputSchema(schema));
 
-    assert.deepEqual(flexible.parse({ count: "4", enabled: "false", fields: "close,volume", symbol: 123 }), {
-      count: 4,
-      enabled: false,
-      fields: ["close", "volume"],
-      symbol: "123",
-    });
-    assert.deepEqual(flexible.parse({ count: 4, enabled: false, fields: ["close"], symbol: "NASDAQ:AAPL" }), {
-      count: 4,
-      enabled: false,
-      fields: ["close"],
-      symbol: "NASDAQ:AAPL",
-    });
+    assert.deepEqual(
+      flexible.parse({ count: "4", enabled: "false", fields: "close,volume", symbol: 123 }),
+      {
+        count: 4,
+        enabled: false,
+        fields: ["close", "volume"],
+        symbol: "123",
+      },
+    );
+    assert.deepEqual(
+      flexible.parse({ count: 4, enabled: false, fields: ["close"], symbol: "NASDAQ:AAPL" }),
+      {
+        count: 4,
+        enabled: false,
+        fields: ["close"],
+        symbol: "NASDAQ:AAPL",
+      },
+    );
   });
 
   it("preserves optional fields while adding flexible parsing", () => {

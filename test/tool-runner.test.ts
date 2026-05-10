@@ -1,9 +1,9 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { runApiTool, type ApiToolRequestFn } from "../src/tool-runner.js";
+import { describe, it } from "node:test";
+import { type ApiToolRequestFn, runApiTool } from "../src/tool-runner.js";
 
 describe("tool runner", () => {
   it("returns the raw response when storage and filter are not requested", async () => {
@@ -99,14 +99,18 @@ describe("tool runner", () => {
       });
 
       assert.equal(result, 10);
-      assert.equal(await readFile(outputFile, "utf8"), "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n");
+      assert.equal(
+        await readFile(outputFile, "utf8"),
+        "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n",
+      );
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
   });
 
   it("rejects invalid storage before calling the API", async () => {
-    const request: ApiToolRequestFn = async () => assert.fail("invalid storage should fail before request");
+    const request: ApiToolRequestFn = async () =>
+      assert.fail("invalid storage should fail before request");
 
     await assert.rejects(
       () =>

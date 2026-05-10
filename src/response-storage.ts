@@ -47,7 +47,11 @@ export async function storeResponse(
   return { stored_file: storedFile, format };
 }
 
-async function writeStoredFile(outputFile: string, content: string, unique: boolean): Promise<string> {
+async function writeStoredFile(
+  outputFile: string,
+  content: string,
+  unique: boolean,
+): Promise<string> {
   await mkdir(path.dirname(outputFile), { recursive: true });
   if (!unique) {
     await writeFile(outputFile, content, "utf8");
@@ -71,13 +75,17 @@ function resolveOutputFile(
   format: Exclude<ResponseStoreFormat, "none">,
 ): string {
   if (options.output_file) return path.resolve(options.output_file);
+  const outputDir = options.output_dir;
+  if (!outputDir) {
+    throw new Error("output_file or output_dir is required when store is json or csv");
+  }
   const paramsHash = options.requestParams
     ? createHash("sha256").update(stableStringify(options.requestParams)).digest("hex").slice(0, 10)
     : undefined;
   const parts = [options.toolName, paramsHash, response?.code, response?.bar_type]
     .filter((part) => typeof part === "string" && part.trim())
     .map((part) => sanitizePathPart(String(part)));
-  return path.join(path.resolve(options.output_dir!), `${parts.join("_")}.${format}`);
+  return path.join(path.resolve(outputDir), `${parts.join("_")}.${format}`);
 }
 
 function stableStringify(value: any): string {

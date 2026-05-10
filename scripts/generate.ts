@@ -3,7 +3,7 @@
  * Run with: npx tsx scripts/generate.ts
  */
 import { writeFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -168,9 +168,7 @@ function schemaToZod(schema: any, description?: string): string {
   } else if (schema.type === "boolean") {
     zod = `z.boolean()`;
   } else if (schema.type === "array") {
-    const itemsZod = schema.items
-      ? schemaToZod(schema.items)
-      : "z.any()";
+    const itemsZod = schema.items ? schemaToZod(schema.items) : "z.any()";
     zod = `z.array(${itemsZod})`;
   } else {
     // Default: string (most query params are strings)
@@ -178,13 +176,12 @@ function schemaToZod(schema: any, description?: string): string {
   }
 
   // Add description
-  let desc =
-    description ||
-    schema.description ||
-    "";
+  let desc = description || schema.description || "";
   // Add format hints for date fields only when description doesn't already explain the format
   if (schema.format === "date" && !desc.toLowerCase().includes("format")) {
-    desc += desc ? ` (format: ${schema.example || "YYYY-MM-DD"})` : `Format: ${schema.example || "YYYY-MM-DD"}`;
+    desc += desc
+      ? ` (format: ${schema.example || "YYYY-MM-DD"})`
+      : `Format: ${schema.example || "YYYY-MM-DD"}`;
   }
   // For large enums, include a note about supported values
   if (schema.enum && schema.enum.length > 30) {
@@ -218,36 +215,54 @@ const TOOL_PARAM_OVERRIDES: Record<string, Record<string, string>> = {
 
 // Extra parameters to inject into specific tools (not yet in upstream OpenAPI spec)
 const EXTRA_TOOL_PARAMS: Record<string, { after: string; param: ParamInfo }[]> = {
-  get_symbol_series: [{
-    after: "dadj",
-    param: { name: "split", zodExpr: `z.boolean().describe("(Optional) Split adjustment for equities and etfs. When false, returns non-split-adjusted data and dadj is ignored. Default to true.")`, required: false },
-  }],
-  get_symbol_history: [{
-    after: "dadj",
-    param: { name: "split", zodExpr: `z.boolean().describe("(Optional) Split adjustment for equities and etfs. When false, returns non-split-adjusted data and dadj is ignored. Default to true.")`, required: false },
-  }],
-  get_quotes: [{
-    after: "dadj",
-    param: { name: "split", zodExpr: `z.boolean().describe("(Optional) Split adjustment for equities and etfs. When false, returns non-split-adjusted data and dadj is ignored. Default to true.")`, required: false },
-  }],
+  get_symbol_series: [
+    {
+      after: "dadj",
+      param: {
+        name: "split",
+        zodExpr: `z.boolean().describe("(Optional) Split adjustment for equities and etfs. When false, returns non-split-adjusted data and dadj is ignored. Default to true.")`,
+        required: false,
+      },
+    },
+  ],
+  get_symbol_history: [
+    {
+      after: "dadj",
+      param: {
+        name: "split",
+        zodExpr: `z.boolean().describe("(Optional) Split adjustment for equities and etfs. When false, returns non-split-adjusted data and dadj is ignored. Default to true.")`,
+        required: false,
+      },
+    },
+  ],
+  get_quotes: [
+    {
+      after: "dadj",
+      param: {
+        name: "split",
+        zodExpr: `z.boolean().describe("(Optional) Split adjustment for equities and etfs. When false, returns non-split-adjusted data and dadj is ignored. Default to true.")`,
+        required: false,
+      },
+    },
+  ],
 };
 
 // Override dadj description to note split interaction
-const DADJ_OVERRIDE = "(Optional) Dividend adjustment for equities and etfs (has no effect on assets without dividends). Ignored when split=false. Default to false.";
+const DADJ_OVERRIDE =
+  "(Optional) Dividend adjustment for equities and etfs (has no effect on assets without dividends). Ignored when split=false. Default to false.";
 
 const PARAM_DESCRIPTION_OVERRIDES: Record<string, string> = {
   // Screener POST body params — aligned with /docs/screener
-  "fields":
+  fields:
     "Array of field names to include in the response (1-10 fields). Discover available fields by calling the GET screener params tool first (e.g., get_stock_screener_params). Field names are case-insensitive.",
-  "sortBy":
+  sortBy:
     'Field name to sort results by. Must be one of the requested fields or "name". Default: "name".',
-  "sortOrder":
-    'Sort order: "asc" (ascending) or "desc" (descending). Default: "asc".',
-  "exchanges":
+  sortOrder: 'Sort order: "asc" (ascending) or "desc" (descending). Default: "asc".',
+  exchanges:
     'Array of exchange names to filter by (e.g., ["NYSE", "NASDAQ"]). Discover available exchanges via the GET screener params tool.',
-  "countries":
+  countries:
     'Array of country codes to filter by (e.g., ["US", "CA"]). Not available for crypto screener. Discover available countries via the GET screener params tool.',
-  "ignore_invalid":
+  ignore_invalid:
     "If true, invalid fields, exchanges, or countries are silently filtered out instead of returning an error. Useful when you're unsure if a field exists.",
 };
 
@@ -301,13 +316,14 @@ function collectParams(
       }
       if (bodySchema.properties) {
         const bodyRequired = new Set(bodySchema.required || []);
-        for (const [name, propSchema] of Object.entries<any>(
-          bodySchema.properties,
-        )) {
+        for (const [name, propSchema] of Object.entries<any>(bodySchema.properties)) {
           if (seen.has(name)) continue;
           seen.add(name);
           // Use tool-specific override, then global override, then OpenAPI description
-          const desc = (toolName && TOOL_PARAM_OVERRIDES[toolName]?.[name]) || PARAM_DESCRIPTION_OVERRIDES[name] || propSchema.description;
+          const desc =
+            (toolName && TOOL_PARAM_OVERRIDES[toolName]?.[name]) ||
+            PARAM_DESCRIPTION_OVERRIDES[name] ||
+            propSchema.description;
           const zodExpr = schemaToZod(propSchema, desc);
           params.push({
             name,
@@ -327,7 +343,7 @@ async function generate(): Promise<void> {
   if (!response.ok) {
     throw new Error(`Failed to fetch OpenAPI spec: ${response.status} ${response.statusText}`);
   }
-  const spec: OpenAPISpec = await response.json() as OpenAPISpec;
+  const spec: OpenAPISpec = (await response.json()) as OpenAPISpec;
 
   const toolEntries: string[] = [];
   const toolNames: string[] = [];
@@ -343,15 +359,11 @@ async function generate(): Promise<void> {
 
       const toolName = TOOL_NAME_MAP[path]?.[method];
       if (!toolName) {
-        console.warn(
-          `No tool name mapping for ${method.toUpperCase()} ${path}, skipping`,
-        );
+        console.warn(`No tool name mapping for ${method.toUpperCase()} ${path}, skipping`);
         continue;
       }
 
-      const baseDesc = [operation.summary, operation.description]
-        .filter(Boolean)
-        .join(". ");
+      const baseDesc = [operation.summary, operation.description].filter(Boolean).join(". ");
       let hint = WORKFLOW_HINTS[toolName] || "";
 
       // Inject request body example from OpenAPI spec if {{EXAMPLE}} placeholder exists
@@ -390,10 +402,7 @@ async function generate(): Promise<void> {
         return `    ${p.name}: ${expr},`;
       });
 
-      const shapeCode =
-        shapeLines.length > 0
-          ? `{\n${shapeLines.join("\n")}\n  }`
-          : "{}";
+      const shapeCode = shapeLines.length > 0 ? `{\n${shapeLines.join("\n")}\n  }` : "{}";
 
       toolEntries.push(`  {
     name: ${escStr(toolName)},
@@ -425,9 +434,7 @@ ${toolEntries.join(",\n")}
 
   const outPath = resolve(__dirname, "../src/tool-definitions.ts");
   writeFileSync(outPath, output, "utf-8");
-  console.log(
-    `Generated ${toolNames.length} tool definitions → src/tool-definitions.ts`,
-  );
+  console.log(`Generated ${toolNames.length} tool definitions → src/tool-definitions.ts`);
   for (const name of toolNames) {
     console.log(`  ${name}`);
   }

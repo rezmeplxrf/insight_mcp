@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export type HistoryBarType = "second" | "minute" | "hour" | "day" | "week" | "month";
@@ -257,7 +258,9 @@ export async function downloadHistory(
       result.merged_file = mergedFile;
       result.files.push(mergedFile);
       if (!options.keep_chunks) {
-        const removableCsvFiles = orderedCsvFiles.filter((filePath) => createdCsvFiles.has(filePath));
+        const removableCsvFiles = orderedCsvFiles.filter((filePath) =>
+          createdCsvFiles.has(filePath),
+        );
         await removeChunkFiles(removableCsvFiles);
         result.files = result.files.filter((filePath) => !removableCsvFiles.includes(filePath));
       }
@@ -287,10 +290,7 @@ export function responseToCsv(response: any): string {
     }
   }
   for (const key of metadataHeaders) keys.add(key);
-  const headers = [
-    ...preferred.filter((key) => keys.delete(key)),
-    ...Array.from(keys).sort(),
-  ];
+  const headers = [...preferred.filter((key) => keys.delete(key)), ...Array.from(keys).sort()];
   const rows = series.map((row: Record<string, any>) =>
     headers.map((key) => (key in row ? row[key] : response?.[key])),
   );
@@ -305,7 +305,8 @@ function planRequestsForSymbol(
   if (isSeriesBarType(options.bar_type)) {
     const rangeStart = parseDay(options.from, "start");
     const rangeEnd = parseDay(options.to, "end");
-    if (compareDays(rangeStart, rangeEnd) > 0) throw new Error("from must be before or equal to to");
+    if (compareDays(rangeStart, rangeEnd) > 0)
+      throw new Error("from must be before or equal to to");
     const rangeLabel = `${formatDay(rangeStart)}_${formatDay(rangeEnd)}`;
     return [
       {
@@ -392,7 +393,10 @@ async function planFuturesHistoryRequests(
   return { mode: "futures", requests };
 }
 
-async function fetchContractSchedule(symbol: string, request: RequestFn): Promise<{
+async function fetchContractSchedule(
+  symbol: string,
+  request: RequestFn,
+): Promise<{
   fullBaseCode: string;
   monthCodes: string[];
   settlementMonths: Map<string, number>;
@@ -400,10 +404,10 @@ async function fetchContractSchedule(symbol: string, request: RequestFn): Promis
   const response = await request("GET", CONTRACTS_PATH, { symbol });
   const inferredBase = continuousToBaseSymbol(symbol);
   const rawBase = String(response?.base_code || inferredBase);
-  const fullBaseCode = rawBase.includes(":")
-    ? rawBase
-    : `${symbol.split(":", 1)[0]}:${rawBase}`;
-  const rootBase = fullBaseCode.includes(":") ? fullBaseCode.split(":").at(-1)! : fullBaseCode;
+  const fullBaseCode = rawBase.includes(":") ? rawBase : `${symbol.split(":", 1)[0]}:${rawBase}`;
+  const rootBase = fullBaseCode.includes(":")
+    ? (fullBaseCode.split(":").at(-1) ?? fullBaseCode)
+    : fullBaseCode;
   const settlementMonths = new Map<string, number>();
 
   for (const contract of response?.contracts ?? []) {
@@ -432,13 +436,7 @@ async function fetchContractSchedule(symbol: string, request: RequestFn): Promis
 
 function optionalHistoryParams(options: DownloadHistoryOptions): Record<string, any> {
   const params: Record<string, any> = {};
-  for (const key of [
-    "bar_interval",
-    "extended",
-    "dadj",
-    "badj",
-    "settlement",
-  ] as const) {
+  for (const key of ["bar_interval", "extended", "dadj", "badj", "settlement"] as const) {
     if (options[key] !== undefined) params[key] = options[key];
   }
   return params;
@@ -462,7 +460,9 @@ function validateOptions(options: DownloadHistoryOptions): void {
   }
   if (
     options.bar_interval !== undefined &&
-    (!Number.isInteger(options.bar_interval) || options.bar_interval < 1 || options.bar_interval > 1440)
+    (!Number.isInteger(options.bar_interval) ||
+      options.bar_interval < 1 ||
+      options.bar_interval > 1440)
   ) {
     throw new Error("bar_interval must be an integer between 1 and 1440");
   }
@@ -607,9 +607,7 @@ function daysInMonth(year: number, month: number): number {
 }
 
 function timeframeLabel(barType: HistoryBarType, interval = 1): string {
-  const suffix = { second: "s", minute: "m", hour: "h", day: "D", week: "W", month: "M" }[
-    barType
-  ];
+  const suffix = { second: "s", minute: "m", hour: "h", day: "D", week: "W", month: "M" }[barType];
   return `${interval}${suffix}`;
 }
 
@@ -735,7 +733,7 @@ async function findExistingTargetFiles(
   const outputRoot = path.dirname(path.dirname(outputBasePath));
   const outputName = path.basename(outputBasePath);
 
-  let entries;
+  let entries: Dirent[];
   try {
     entries = await readdir(outputRoot, { withFileTypes: true });
   } catch (error: any) {
@@ -745,7 +743,10 @@ async function findExistingTargetFiles(
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const candidateFiles = outputFilesForFormat(path.join(outputRoot, entry.name, outputName), format);
+    const candidateFiles = outputFilesForFormat(
+      path.join(outputRoot, entry.name, outputName),
+      format,
+    );
     if (await allFilesExist(candidateFiles)) return candidateFiles;
   }
   return null;
@@ -775,7 +776,7 @@ function escapeCsvCell(value: any): string {
   if (value === undefined || value === null) return "";
   const text = typeof value === "object" ? JSON.stringify(value) : String(value);
   if (/[",\n\r]/.test(text)) {
-    return `"${text.replace(/"/g, "\"\"")}"`;
+    return `"${text.replace(/"/g, '""')}"`;
   }
   return text;
 }
@@ -787,9 +788,9 @@ function parseCsvLine(line: string): string[] {
 
   for (let index = 0; index < line.length; index += 1) {
     const char = line[index];
-    if (char === "\"") {
-      if (inQuotes && line[index + 1] === "\"") {
-        current += "\"";
+    if (char === '"') {
+      if (inQuotes && line[index + 1] === '"') {
+        current += '"';
         index += 1;
       } else {
         inQuotes = !inQuotes;

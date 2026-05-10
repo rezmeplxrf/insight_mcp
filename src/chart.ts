@@ -1,8 +1,8 @@
-import { ChartJSNodeCanvas } from "chartjs-node-canvas";
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ChartConfiguration } from "chart.js";
-import { writeFileSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
+import { ChartJSNodeCanvas } from "chartjs-node-canvas";
 
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 400;

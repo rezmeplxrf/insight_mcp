@@ -2,8 +2,9 @@
  * Integration test for all MCP tools, examples, and JSONata filters.
  * Run: npx tsx test/test-tools.ts
  */
-import { ApiClient } from "../src/api-client.js";
+
 import jsonata from "jsonata";
+import { ApiClient } from "../src/api-client.js";
 
 const apiKey = process.env.INSIGHTSENTRY_API_KEY?.trim();
 if (!apiKey) {
@@ -79,7 +80,11 @@ test("get_quotes: multiple symbols", async () => {
 
 // ─── get_symbol_series ───
 test("get_symbol_series: daily bars", async () => {
-  const r = await apiCall("GET", "/v3/symbols/{symbol}/series", { symbol: "NASDAQ:AAPL", bar_type: "day", dp: 5 });
+  const r = await apiCall("GET", "/v3/symbols/{symbol}/series", {
+    symbol: "NASDAQ:AAPL",
+    bar_type: "day",
+    dp: 5,
+  });
   assert(r.code === "NASDAQ:AAPL", "code should match");
   assert(r.series?.length > 0, "should have series data");
   const bar = r.series[0];
@@ -88,14 +93,20 @@ test("get_symbol_series: daily bars", async () => {
 });
 
 test("get_symbol_series: abbr mode", async () => {
-  const r = await apiCall("GET", "/v3/symbols/{symbol}/series", { symbol: "NASDAQ:AAPL", bar_type: "day", dp: 5, abbr: true });
+  const r = await apiCall("GET", "/v3/symbols/{symbol}/series", {
+    symbol: "NASDAQ:AAPL",
+    bar_type: "day",
+    dp: 5,
+    abbr: true,
+  });
   assert(r.series_keys?.length > 0, "should have series_keys");
   assert(Array.isArray(r.series[0]), "series items should be arrays in abbr mode");
 });
 
 test("get_symbol_series: with filter (avg_close)", async () => {
   const r = await apiCall(
-    "GET", "/v3/symbols/{symbol}/series",
+    "GET",
+    "/v3/symbols/{symbol}/series",
     { symbol: "NASDAQ:AAPL", bar_type: "day", dp: 100 },
     '{ "code": code, "avg_close": $average(series.close), "max_high": $max(series.high), "min_low": $min(series.low) }',
   );
@@ -107,7 +118,8 @@ test("get_symbol_series: with filter (avg_close)", async () => {
 
 test("get_symbol_series: with filter (period return)", async () => {
   const r = await apiCall(
-    "GET", "/v3/symbols/{symbol}/series",
+    "GET",
+    "/v3/symbols/{symbol}/series",
     { symbol: "NASDAQ:AAPL", bar_type: "day", dp: 300 },
     '{ "code": code, "period_return_pct": $round((series[-1].close - series[0].open) / series[0].open * 100, 2), "total_volume": $sum(series.volume) }',
   );
@@ -117,7 +129,11 @@ test("get_symbol_series: with filter (period return)", async () => {
 
 // ─── get_symbol_history ───
 test("get_symbol_history: minute bars", async () => {
-  const r = await apiCall("GET", "/v3/symbols/{symbol}/history", { symbol: "NASDAQ:AAPL", bar_type: "minute", start_date: "2025-01" });
+  const r = await apiCall("GET", "/v3/symbols/{symbol}/history", {
+    symbol: "NASDAQ:AAPL",
+    bar_type: "minute",
+    start_date: "2025-01",
+  });
   assert(r.code === "NASDAQ:AAPL", "code should match");
   assert(r.series?.length > 0, "should have history data");
 });
@@ -132,7 +148,8 @@ test("get_symbol_info: basic", async () => {
 
 test("get_symbol_info: filter $keys", async () => {
   const r = await apiCall(
-    "GET", "/v3/symbols/{symbol}/info",
+    "GET",
+    "/v3/symbols/{symbol}/info",
     { symbol: "NASDAQ:AAPL" },
     "$keys($)",
   );
@@ -142,7 +159,8 @@ test("get_symbol_info: filter $keys", async () => {
 
 test("get_symbol_info: filter specific fields", async () => {
   const r = await apiCall(
-    "GET", "/v3/symbols/{symbol}/info",
+    "GET",
+    "/v3/symbols/{symbol}/info",
     { symbol: "NASDAQ:AAPL" },
     '{ "sector": sector, "industry": industry, "market_cap": market_cap, "ceo": ceo }',
   );
@@ -175,7 +193,8 @@ test("get_symbol_fundamentals: basic", async () => {
 
 test("get_symbol_fundamentals: filter $distinct categories", async () => {
   const r = await apiCall(
-    "GET", "/v3/symbols/{symbol}/fundamentals",
+    "GET",
+    "/v3/symbols/{symbol}/fundamentals",
     { symbol: "NASDAQ:AAPL" },
     "$distinct(data.category)",
   );
@@ -185,7 +204,8 @@ test("get_symbol_fundamentals: filter $distinct categories", async () => {
 
 test("get_symbol_fundamentals: filter by category Statistics", async () => {
   const r = await apiCall(
-    "GET", "/v3/symbols/{symbol}/fundamentals",
+    "GET",
+    "/v3/symbols/{symbol}/fundamentals",
     { symbol: "NASDAQ:AAPL" },
     'data[category="Statistics"].{ "id": id, "name": name, "value": value }',
   );
@@ -197,7 +217,8 @@ test("get_symbol_fundamentals: filter by category Statistics", async () => {
 
 test("get_symbol_fundamentals: filter id+name only", async () => {
   const r = await apiCall(
-    "GET", "/v3/symbols/{symbol}/fundamentals",
+    "GET",
+    "/v3/symbols/{symbol}/fundamentals",
     { symbol: "NASDAQ:AAPL" },
     'data.{ "id": id, "name": name }',
   );
@@ -215,7 +236,9 @@ test("get_fundamentals_meta: basic", async () => {
 
 test("get_fundamentals_meta: filter by name keyword", async () => {
   const r = await apiCall(
-    "GET", "/v3/symbols/fundamentals", {},
+    "GET",
+    "/v3/symbols/fundamentals",
+    {},
     'base[$contains($lowercase(name), "cash flow")].{ "id": id, "name": name, "period": period }',
   );
   assert(Array.isArray(r), "should return array");
@@ -223,26 +246,22 @@ test("get_fundamentals_meta: filter by name keyword", async () => {
 });
 
 test("get_fundamentals_meta: filter $distinct categories", async () => {
-  const r = await apiCall(
-    "GET", "/v3/symbols/fundamentals", {},
-    "$distinct(base.category)",
-  );
+  const r = await apiCall("GET", "/v3/symbols/fundamentals", {}, "$distinct(base.category)");
   assert(Array.isArray(r), "should return array of categories");
   assert(r.length > 0, "should have categories");
 });
 
 test("get_fundamentals_meta: filter $distinct groups", async () => {
-  const r = await apiCall(
-    "GET", "/v3/symbols/fundamentals", {},
-    "$distinct(base.group)",
-  );
+  const r = await apiCall("GET", "/v3/symbols/fundamentals", {}, "$distinct(base.group)");
   assert(Array.isArray(r), "should return array of groups");
   assert(r.length > 0, "should have groups");
 });
 
 test("get_fundamentals_meta: filter series IDs by keyword", async () => {
   const r = await apiCall(
-    "GET", "/v3/symbols/fundamentals", {},
+    "GET",
+    "/v3/symbols/fundamentals",
+    {},
     'fundamental_series[$contains($lowercase(name), "cash") or $contains($lowercase(name), "income")].id',
   );
   assert(Array.isArray(r) || typeof r === "string", "should return IDs");
@@ -268,7 +287,11 @@ test("list_options: basic", async () => {
 });
 
 test("list_options: with range and type", async () => {
-  const r = await apiCall("GET", "/v3/options/list", { code: "NASDAQ:AAPL", type: "call", range: 10 });
+  const r = await apiCall("GET", "/v3/options/list", {
+    code: "NASDAQ:AAPL",
+    type: "call",
+    range: 10,
+  });
   assert(r.codes?.length > 0, "should have filtered option codes");
   assert(typeof r.last_price === "number", "should have last_price when range is provided");
 });
@@ -276,15 +299,24 @@ test("list_options: with range and type", async () => {
 // ─── get_options_expiration ───
 test("get_options_expiration: basic", async () => {
   // First get a valid expiration from list_options
-  const list = await apiCall("GET", "/v3/options/list", { code: "NASDAQ:AAPL", type: "call", range: 5 });
+  const list = await apiCall("GET", "/v3/options/list", {
+    code: "NASDAQ:AAPL",
+    type: "call",
+    range: 5,
+  });
   // Parse an expiration from the first code (format: OPRA:AAPLyymmddCstrike)
   const firstCode = list.codes[0];
   const match = firstCode.match(/OPRA:\w+(\d{6})[CP]/);
   assert(match, `could not parse expiration from ${firstCode}`);
-  const dateStr = match![1];
+  const dateStr = match[1];
   const expiration = `20${dateStr.slice(0, 2)}-${dateStr.slice(2, 4)}-${dateStr.slice(4, 6)}`;
 
-  const r = await apiCall("GET", "/v3/options/expiration", { code: "NASDAQ:AAPL", expiration, type: "call", range: 10 });
+  const r = await apiCall("GET", "/v3/options/expiration", {
+    code: "NASDAQ:AAPL",
+    expiration,
+    type: "call",
+    range: 10,
+  });
   assert(r.underlying_code, "should have underlying_code");
   assert(r.data?.length > 0, "should have option chain data");
   const opt = r.data[0];
@@ -294,14 +326,20 @@ test("get_options_expiration: basic", async () => {
 });
 
 test("get_options_expiration: with filter (delta range)", async () => {
-  const list = await apiCall("GET", "/v3/options/list", { code: "NASDAQ:AAPL", type: "call", range: 10 });
+  const list = await apiCall("GET", "/v3/options/list", {
+    code: "NASDAQ:AAPL",
+    type: "call",
+    range: 10,
+  });
   const firstCode = list.codes[0];
   const match = firstCode.match(/OPRA:\w+(\d{6})[CP]/);
-  const dateStr = match![1];
+  assert(match, "option code should include expiration date");
+  const dateStr = match[1];
   const expiration = `20${dateStr.slice(0, 2)}-${dateStr.slice(2, 4)}-${dateStr.slice(4, 6)}`;
 
   const r = await apiCall(
-    "GET", "/v3/options/expiration",
+    "GET",
+    "/v3/options/expiration",
     { code: "NASDAQ:AAPL", expiration, range: 10, type: "call" },
     'data[$abs(delta) >= 0.3 and $abs(delta) <= 0.7].{ "code": code, "strike": strike_price, "delta": delta, "iv": implied_volatility }',
   );
@@ -316,7 +354,11 @@ test("get_options_expiration: with filter (delta range)", async () => {
 
 // ─── get_options_strike ───
 test("get_options_strike: basic", async () => {
-  const r = await apiCall("GET", "/v3/options/strike", { code: "NASDAQ:AAPL", range: 5, type: "call" });
+  const r = await apiCall("GET", "/v3/options/strike", {
+    code: "NASDAQ:AAPL",
+    range: 5,
+    type: "call",
+  });
   assert(r.underlying_code, "should have underlying_code");
   assert(r.data?.length > 0, "should have strike data");
 });
@@ -370,7 +412,9 @@ test("get_newsfeed: with keywords", async () => {
 
 test("get_newsfeed: with filter (first 3 headlines)", async () => {
   const r = await apiCall(
-    "GET", "/v3/newsfeed", { keywords: "tesla", limit: "10" },
+    "GET",
+    "/v3/newsfeed",
+    { keywords: "tesla", limit: "10" },
     'data[[0..2]].{ "title": title, "published_at": published_at }',
   );
   assert(Array.isArray(r), "should return array");
@@ -391,7 +435,9 @@ test("get_stock_screener_params: basic", async () => {
 
 test("get_stock_screener_params: filter by keyword", async () => {
   const r = await apiCall(
-    "GET", "/v3/screeners/stock", {},
+    "GET",
+    "/v3/screeners/stock",
+    {},
     'available_fields[$contains($, "volume")]',
   );
   assert(Array.isArray(r) || typeof r === "string", "should return matching fields");
@@ -414,7 +460,8 @@ test("screen_stocks: basic", async () => {
 
 test("screen_stocks: with filter (sum market_cap)", async () => {
   const r = await apiCall(
-    "POST", "/v3/screeners/stock",
+    "POST",
+    "/v3/screeners/stock",
     { fields: ["close", "volume", "market_cap"] },
     "$sum(data[market_cap != null].market_cap)",
   );
@@ -423,7 +470,8 @@ test("screen_stocks: with filter (sum market_cap)", async () => {
 
 test("screen_stocks: with filter (only gainers)", async () => {
   const r = await apiCall(
-    "POST", "/v3/screeners/stock",
+    "POST",
+    "/v3/screeners/stock",
     { fields: ["close", "volume", "market_cap", "change_percent"], exchanges: ["NYSE", "NASDAQ"] },
     'data[change_percent][change_percent > 0].{ "name": name, "change_percent": change_percent }',
   );
@@ -491,7 +539,9 @@ test("get_documents: basic", async () => {
 
 test("get_documents: filter 10-K/10-Q", async () => {
   const r = await apiCall(
-    "GET", "/v3/documents", { code: "NASDAQ:AAPL" },
+    "GET",
+    "/v3/documents",
+    { code: "NASDAQ:AAPL" },
     '$[form="10-K" or form="10-Q"].{ "id": id, "title": title, "form": form }',
   );
   assert(Array.isArray(r), "should return filtered array");
@@ -503,7 +553,9 @@ test("get_documents: filter 10-K/10-Q", async () => {
 // ─── get_document ───
 test("get_document: read a transcript", async () => {
   const docs = await apiCall("GET", "/v3/documents", { code: "NASDAQ:AAPL" });
-  const transcript = docs.find((d: any) => d.category === "Call transcript" && d.is_available && !d.is_pdf);
+  const transcript = docs.find(
+    (d: any) => d.category === "Call transcript" && d.is_available && !d.is_pdf,
+  );
   assert(transcript, "should find an available call transcript");
   const r = await apiCall("GET", "/v3/documents/{id}", { id: transcript.id, code: "NASDAQ:AAPL" });
   assert(r.title, "should have title");
@@ -514,57 +566,95 @@ test("get_document: read a transcript", async () => {
 // ─── Screener recipe tests (from INSTRUCTIONS) ───
 test("screener recipe: value screen", async () => {
   const r = await apiCall(
-    "POST", "/v3/screeners/stock",
+    "POST",
+    "/v3/screeners/stock",
     {
-      fields: ["close", "market_cap", "price_earnings_ttm", "price_free_cash_flow_ttm", "dividends_yield", "enterprise_value_ebitda_ttm"],
+      fields: [
+        "close",
+        "market_cap",
+        "price_earnings_ttm",
+        "price_free_cash_flow_ttm",
+        "dividends_yield",
+        "enterprise_value_ebitda_ttm",
+      ],
       exchanges: ["NYSE", "NASDAQ"],
       sortBy: "market_cap",
       sortOrder: "desc",
     },
     'data[price_earnings_ttm][price_free_cash_flow_ttm][price_earnings_ttm > 0 and price_earnings_ttm < 15 and price_free_cash_flow_ttm < 10].{ "name": name, "code": symbol_code, "pe": price_earnings_ttm, "p_fcf": price_free_cash_flow_ttm, "div_yield": dividends_yield, "ev_ebitda": enterprise_value_ebitda_ttm }',
   );
+  assert(r === undefined || Array.isArray(r) || typeof r === "object", "filter result shape");
   // May return undefined, single object, or array — just verify no error
 });
 
 test("screener recipe: momentum screen", async () => {
   const r = await apiCall(
-    "POST", "/v3/screeners/stock",
+    "POST",
+    "/v3/screeners/stock",
     {
-      fields: ["close", "market_cap", "change_percent_1W", "performance_3_month", "relative_volume_intraday", "average_volume_30d"],
+      fields: [
+        "close",
+        "market_cap",
+        "change_percent_1W",
+        "performance_3_month",
+        "relative_volume_intraday",
+        "average_volume_30d",
+      ],
       exchanges: ["NYSE", "NASDAQ"],
       sortBy: "performance_3_month",
       sortOrder: "desc",
     },
     'data[performance_3_month][relative_volume_intraday][performance_3_month > 20 and relative_volume_intraday > 1.5].{ "name": name, "code": symbol_code, "perf_3m": performance_3_month, "chg_1w": change_percent_1W, "rvol": relative_volume_intraday }',
   );
+  assert(r === undefined || Array.isArray(r) || typeof r === "object", "filter result shape");
   // May return undefined, single object, or array — just verify no error
 });
 
 test("screener recipe: quality screen", async () => {
   const r = await apiCall(
-    "POST", "/v3/screeners/stock",
+    "POST",
+    "/v3/screeners/stock",
     {
-      fields: ["close", "market_cap", "return_on_invested_capital_fq", "debt_to_equity_fq", "operating_margin_ttm", "free_cash_flow_margin_ttm", "gross_margin_ttm"],
+      fields: [
+        "close",
+        "market_cap",
+        "return_on_invested_capital_fq",
+        "debt_to_equity_fq",
+        "operating_margin_ttm",
+        "free_cash_flow_margin_ttm",
+        "gross_margin_ttm",
+      ],
       exchanges: ["NYSE", "NASDAQ"],
       sortBy: "market_cap",
       sortOrder: "desc",
     },
     'data[return_on_invested_capital_fq][debt_to_equity_fq][operating_margin_ttm][return_on_invested_capital_fq > 20 and debt_to_equity_fq < 1 and operating_margin_ttm > 25].{ "name": name, "code": symbol_code, "roic": return_on_invested_capital_fq, "d_e": debt_to_equity_fq, "op_margin": operating_margin_ttm, "fcf_margin": free_cash_flow_margin_ttm }',
   );
+  assert(r === undefined || Array.isArray(r) || typeof r === "object", "filter result shape");
   // May return undefined, single object, or array — just verify no error
 });
 
 test("screener recipe: volatility + volume spike", async () => {
   const r = await apiCall(
-    "POST", "/v3/screeners/stock",
+    "POST",
+    "/v3/screeners/stock",
     {
-      fields: ["close", "market_cap", "volatility_week", "volatility_month", "relative_volume_intraday", "gap", "change_percent"],
+      fields: [
+        "close",
+        "market_cap",
+        "volatility_week",
+        "volatility_month",
+        "relative_volume_intraday",
+        "gap",
+        "change_percent",
+      ],
       exchanges: ["NYSE", "NASDAQ"],
       sortBy: "relative_volume_intraday",
       sortOrder: "desc",
     },
     'data[relative_volume_intraday][volatility_week][relative_volume_intraday > 2 and volatility_week > 3].{ "name": name, "code": symbol_code, "vol_w": volatility_week, "rvol": relative_volume_intraday, "gap": gap, "chg": change_percent }',
   );
+  assert(r === undefined || Array.isArray(r) || typeof r === "object", "filter result shape");
   // May return undefined, single object, or array — just verify no error
 });
 

@@ -1,17 +1,13 @@
-import { z } from "zod";
-import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { createInterface } from "node:readline/promises";
+import type { z } from "zod";
 import { ApiClient } from "./api-client.js";
-import { toolDefinitions, type ToolDefinition } from "./tool-definitions.js";
-import { saveConfig, deleteConfig, resolveApiKey, getConfigLocation } from "./config.js";
-import { downloadHistory, type DownloadHistoryOptions } from "./history.js";
+import { coerceArgs, getZodEnumValues, getZodTypeName, isOptionalZodType } from "./arg-coercion.js";
+import { deleteConfig, getConfigLocation, resolveApiKey, saveConfig } from "./config.js";
+import { type DownloadHistoryOptions, downloadHistory } from "./history.js";
+import { type ToolDefinition, toolDefinitions } from "./tool-definitions.js";
 import { runApiTool } from "./tool-runner.js";
-import {
-  coerceArgs,
-  getZodEnumValues,
-  getZodTypeName,
-  isOptionalZodType,
-} from "./arg-coercion.js";
+
 export { coerceArgs } from "./arg-coercion.js";
 
 const DOWNLOAD_HISTORY_COMMAND = "download_history";
@@ -73,16 +69,22 @@ export function buildHelp(): string {
     const desc = tool.description.split(".")[0]; // first sentence
     lines.push(`  ${tool.name.padEnd(32)} ${desc}`);
   }
-  lines.push(`  ${DOWNLOAD_HISTORY_COMMAND.padEnd(32)} Download historical ranges to JSON/CSV files with concurrency and progress`);
+  lines.push(
+    `  ${DOWNLOAD_HISTORY_COMMAND.padEnd(32)} Download historical ranges to JSON/CSV files with concurrency and progress`,
+  );
 
   lines.push("");
   lines.push("Quick Start:");
   lines.push('  insight search_symbols --query "apple"');
   lines.push('  insight get_quotes --codes "NASDAQ:AAPL,NASDAQ:MSFT"');
   lines.push('  insight get_symbol_series --symbol "NASDAQ:AAPL" --bar_type day --dp 30');
-  lines.push('  insight download_history --symbol "NASDAQ:AAPL" --bar_type minute --from 2024-01 --to 2024-03 --output_dir ./data --format csv');
-  lines.push('  insight screen_stocks --fields "close,volume,market_cap" --exchanges "NYSE,NASDAQ" --sortBy market_cap --sortOrder desc');
-  lines.push('  insight get_earnings --c US');
+  lines.push(
+    '  insight download_history --symbol "NASDAQ:AAPL" --bar_type minute --from 2024-01 --to 2024-03 --output_dir ./data --format csv',
+  );
+  lines.push(
+    '  insight screen_stocks --fields "close,volume,market_cap" --exchanges "NYSE,NASDAQ" --sortBy market_cap --sortOrder desc',
+  );
+  lines.push("  insight get_earnings --c US");
   lines.push('  insight list_options --code "NASDAQ:AAPL" --type call --range 10');
   lines.push("");
   lines.push("All tools support --filter <jsonata> to transform the response.");
@@ -92,7 +94,9 @@ export function buildHelp(): string {
   lines.push("  insight login --key <your-api-key>    Save API key (persisted across sessions)");
   lines.push("  insight logout                        Remove saved API key");
   lines.push("");
-  lines.push("  Or set INSIGHTSENTRY_API_KEY environment variable (takes priority over saved key).");
+  lines.push(
+    "  Or set INSIGHTSENTRY_API_KEY environment variable (takes priority over saved key).",
+  );
   lines.push("  Get your API key from https://insightsentry.com/dashboard");
 
   return lines.join("\n");
@@ -149,18 +153,14 @@ const toolExamples: Record<string, string[]> = {
     'insight get_symbol_history --symbol "NASDAQ:AAPL" --bar_type minute --start_date "2025-01"',
     'insight get_symbol_history --symbol "NASDAQ:AAPL" --bar_type hour --start_date "2025-06" --bar_interval 4',
   ],
-  get_symbol_contracts: [
-    'insight get_symbol_contracts --symbol "CME_MINI:NQ1!"',
-  ],
+  get_symbol_contracts: ['insight get_symbol_contracts --symbol "CME_MINI:NQ1!"'],
   get_symbol_info: [
     'insight get_symbol_info --symbol "NASDAQ:AAPL"',
     `insight get_symbol_info --symbol "NASDAQ:AAPL" --filter '{ "sector": sector, "market_cap": market_cap, "pe": price_earnings_ttm }'`,
   ],
-  get_symbol_session: [
-    'insight get_symbol_session --symbol "NASDAQ:AAPL"',
-  ],
+  get_symbol_session: ['insight get_symbol_session --symbol "NASDAQ:AAPL"'],
   get_symbol_fundamentals: [
-    'insight get_symbol_fundamentals --symbol "NASDAQ:AAPL" --filter \'$distinct(data.category)\'',
+    "insight get_symbol_fundamentals --symbol \"NASDAQ:AAPL\" --filter '$distinct(data.category)'",
     `insight get_symbol_fundamentals --symbol "NASDAQ:AAPL" --filter 'data[category="Valuation"].{ "id": id, "name": name, "value": value }'`,
   ],
   get_fundamentals_series: [
@@ -183,21 +183,12 @@ const toolExamples: Record<string, string[]> = {
     'insight get_options_strike --code "NASDAQ:AAPL" --range 5 --sortBy delta --sort desc',
   ],
   get_dividends: [
-    'insight get_dividends --c US',
+    "insight get_dividends --c US",
     'insight get_dividends --code "NASDAQ:AAPL" --w 4',
   ],
-  get_earnings: [
-    'insight get_earnings --c US',
-    'insight get_earnings --code "NASDAQ:AAPL"',
-  ],
-  get_ipos: [
-    'insight get_ipos --c US',
-    'insight get_ipos --w 4',
-  ],
-  get_events: [
-    'insight get_events --c US',
-    'insight get_events --w 2',
-  ],
+  get_earnings: ["insight get_earnings --c US", 'insight get_earnings --code "NASDAQ:AAPL"'],
+  get_ipos: ["insight get_ipos --c US", "insight get_ipos --w 4"],
+  get_events: ["insight get_events --c US", "insight get_events --w 2"],
   get_newsfeed: [
     'insight get_newsfeed --keywords "tesla,apple" --limit 10',
     `insight get_newsfeed --keywords "bitcoin" --filter 'data[[0..4]].{ "title": title, "published_at": published_at }'`,
@@ -216,25 +207,17 @@ const toolExamples: Record<string, string[]> = {
     'insight screen_crypto --fields "close,volume,market_cap" --sortBy market_cap --sortOrder desc',
   ],
   get_stock_screener_params: [
-    'insight get_stock_screener_params',
+    "insight get_stock_screener_params",
     `insight get_stock_screener_params --filter 'available_fields[$contains($, "volume")]'`,
   ],
-  get_etf_screener_params: [
-    'insight get_etf_screener_params',
-  ],
-  get_bond_screener_params: [
-    'insight get_bond_screener_params',
-  ],
-  get_crypto_screener_params: [
-    'insight get_crypto_screener_params',
-  ],
+  get_etf_screener_params: ["insight get_etf_screener_params"],
+  get_bond_screener_params: ["insight get_bond_screener_params"],
+  get_crypto_screener_params: ["insight get_crypto_screener_params"],
   get_documents: [
     'insight get_documents --code "NASDAQ:AAPL"',
     `insight get_documents --code "NASDAQ:AAPL" --filter '$[form="10-K" or form="10-Q"].{ "id": id, "title": title, "form": form }'`,
   ],
-  get_document: [
-    'insight get_document --id "transcripts:2133670" --code "NASDAQ:AAPL" --text',
-  ],
+  get_document: ['insight get_document --id "transcripts:2133670" --code "NASDAQ:AAPL" --text'],
 };
 
 export function buildToolHelp(tool: ToolDefinition): string {
@@ -254,10 +237,16 @@ export function buildToolHelp(tool: ToolDefinition): string {
   }
 
   // filter is always available
-  lines.push(`  --${"filter".padEnd(24)} string [optional]  JSONata expression to transform the response`);
-  lines.push(`  --${"store".padEnd(24)} enum(none|json|csv) [optional]  Store the response instead of printing it. Default is none. csv is only for get_symbol_series.`);
+  lines.push(
+    `  --${"filter".padEnd(24)} string [optional]  JSONata expression to transform the response`,
+  );
+  lines.push(
+    `  --${"store".padEnd(24)} enum(none|json|csv) [optional]  Store the response instead of printing it. Default is none. csv is only for get_symbol_series.`,
+  );
   lines.push(`  --${"output_file".padEnd(24)} string [optional]  File path for stored response.`);
-  lines.push(`  --${"output_dir".padEnd(24)} string [optional]  Directory for stored response when output_file is not set.`);
+  lines.push(
+    `  --${"output_dir".padEnd(24)} string [optional]  Directory for stored response when output_file is not set.`,
+  );
 
   const examples = toolExamples[tool.name];
   if (examples?.length) {
@@ -287,7 +276,11 @@ function formatTypeName(t: z.ZodTypeAny): string {
   return name || "string";
 }
 
-type RequestFn = (method: string, pathTemplate: string, params: Record<string, any>) => Promise<any>;
+type RequestFn = (
+  method: string,
+  pathTemplate: string,
+  params: Record<string, any>,
+) => Promise<any>;
 
 interface CliIO {
   write: (s: string) => void;
@@ -314,7 +307,9 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
   if (toolName === "login") {
     const key = await resolveLoginKey(args, io);
     if (!key) {
-      io.write("Usage: insight login --key <your-api-key>\n\nGet your API key from https://insightsentry.com/dashboard");
+      io.write(
+        "Usage: insight login --key <your-api-key>\n\nGet your API key from https://insightsentry.com/dashboard",
+      );
       io.exit(1);
       return;
     }
@@ -340,7 +335,9 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
 
     const request = resolveRequest(io);
     if (!request) {
-      io.write("Error: No API key found.\n\nSet it with:  insight login --key <your-api-key>\nOr export:    export INSIGHTSENTRY_API_KEY=your-api-key\n\nGet your API key from https://insightsentry.com/dashboard");
+      io.write(
+        "Error: No API key found.\n\nSet it with:  insight login --key <your-api-key>\nOr export:    export INSIGHTSENTRY_API_KEY=your-api-key\n\nGet your API key from https://insightsentry.com/dashboard",
+      );
       io.exit(1);
       return;
     }
@@ -390,7 +387,9 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
   // Resolve request function
   const request = resolveRequest(io);
   if (!request) {
-    io.write("Error: No API key found.\n\nSet it with:  insight login --key <your-api-key>\nOr export:    export INSIGHTSENTRY_API_KEY=your-api-key\n\nGet your API key from https://insightsentry.com/dashboard");
+    io.write(
+      "Error: No API key found.\n\nSet it with:  insight login --key <your-api-key>\nOr export:    export INSIGHTSENTRY_API_KEY=your-api-key\n\nGet your API key from https://insightsentry.com/dashboard",
+    );
     io.exit(1);
     return;
   }
@@ -536,7 +535,15 @@ function parseDownloadHistoryArgs(args: Record<string, string>): DownloadHistory
   for (const key of ["bar_interval", "concurrency", "contract_lookback_months"] as const) {
     if (args[key] !== undefined) options[key] = Number(args[key]);
   }
-  for (const key of ["overwrite", "merge", "keep_chunks", "extended", "dadj", "badj", "settlement"] as const) {
+  for (const key of [
+    "overwrite",
+    "merge",
+    "keep_chunks",
+    "extended",
+    "dadj",
+    "badj",
+    "settlement",
+  ] as const) {
     if (args[key] !== undefined) options[key] = args[key] === "true";
   }
   if (args.format !== undefined) {
@@ -549,8 +556,8 @@ function parseDownloadHistoryArgs(args: Record<string, string>): DownloadHistory
 export function main() {
   const rl = createInterface({ input, output });
   runCli(process.argv.slice(2), {
-    write: (s) => process.stdout.write(s + "\n"),
-    progress: (s) => process.stderr.write(s + "\n"),
+    write: (s) => process.stdout.write(`${s}\n`),
+    progress: (s) => process.stderr.write(`${s}\n`),
     prompt: (question) => rl.question(question),
     isInteractive: process.stdin.isTTY && process.stdout.isTTY && process.env.CI !== "true",
     exit: (code) => process.exit(code),

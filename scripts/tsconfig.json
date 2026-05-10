@@ -4,8 +4,6 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": [
-    "./**/*"
-  ],
+  "include": ["./**/*"],
   "exclude": []
 }

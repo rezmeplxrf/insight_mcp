@@ -15,7 +15,8 @@ export const docResources: DocResource[] = [
   {
     uri: "insightsentry://docs/rest-api",
     name: "InsightSentry REST API Guide",
-    description: "Complete REST API reference: authentication, base URL, all endpoints with parameters and response formats",
+    description:
+      "Complete REST API reference: authentication, base URL, all endpoints with parameters and response formats",
     mimeType: "text/markdown",
     content: `# InsightSentry REST API Guide
 
@@ -139,7 +140,8 @@ Use the \`search_symbols\` tool to find symbol codes.
   {
     uri: "insightsentry://docs/workflows",
     name: "InsightSentry Integration Workflows",
-    description: "Step-by-step workflows for common use cases: building trading apps, dashboards, screeners, and WebSocket integrations",
+    description:
+      "Step-by-step workflows for common use cases: building trading apps, dashboards, screeners, and WebSocket integrations",
     mimeType: "text/markdown",
     content: `# InsightSentry Integration Workflows
 
@@ -373,7 +375,8 @@ for contract in contracts["contracts"]:
   {
     uri: "insightsentry://docs/websocket",
     name: "InsightSentry WebSocket API Guide",
-    description: "Complete WebSocket API documentation: connection, authentication, subscriptions, data formats, keepalive, error handling, and code examples",
+    description:
+      "Complete WebSocket API documentation: connection, authentication, subscriptions, data formats, keepalive, error handling, and code examples",
     mimeType: "text/markdown",
     content: `# InsightSentry WebSocket API Guide
 
@@ -1202,7 +1205,8 @@ asyncio.run(websocket_client())
   {
     uri: "insightsentry://docs/screener",
     name: "InsightSentry Screener API Guide",
-    description: "Screener API: discover available fields, filter stocks/ETFs/bonds/crypto with custom criteria",
+    description:
+      "Screener API: discover available fields, filter stocks/ETFs/bonds/crypto with custom criteria",
     mimeType: "text/markdown",
     content: `# InsightSentry Screener API Guide
 
@@ -1583,7 +1587,8 @@ POST https://api.insightsentry.com/v3/screeners/stock
   {
     uri: "insightsentry://docs/options",
     name: "InsightSentry Options API Guide",
-    description: "Options API: list options, option chains, Greeks, option code format, historical data",
+    description:
+      "Options API: list options, option chains, Greeks, option code format, historical data",
     mimeType: "text/markdown",
     content: `# InsightSentry Options API Guide
 
@@ -2506,7 +2511,8 @@ GET https://api.insightsentry.com/v3/symbols/OPRA:AAPL271217P205.0/series?bar_ty
   {
     uri: "insightsentry://docs/history",
     name: "InsightSentry History Endpoints Guide",
-    description: "Intraday historical data endpoints (second/minute/hour): query parameters, concurrency limits, caching, and when to use history vs series",
+    description:
+      "Intraday historical data endpoints (second/minute/hour): query parameters, concurrency limits, caching, and when to use history vs series",
     mimeType: "text/markdown",
     content: `# History Endpoints Guide
 
@@ -2618,7 +2624,8 @@ for i in range(0, len(months), 4):
   {
     uri: "insightsentry://docs/futures-history",
     name: "InsightSentry Futures History Guide",
-    description: "How to fetch extensive historical data for futures contracts, including contract month logic",
+    description:
+      "How to fetch extensive historical data for futures contracts, including contract month logic",
     mimeType: "text/markdown",
     content: `# Futures Historical Data Guide
 
@@ -2779,5 +2786,5 @@ def main():
                 fetch_and_save(symbol_code, start_date)
 
     main()\``,
-  }
+  },
 ];

@@ -1,8 +1,8 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { describe, it } from "node:test";
 import { storeResponse, validateResponseStorage } from "../src/response-storage.js";
 
 describe("response storage", () => {
@@ -17,11 +17,21 @@ describe("response storage", () => {
     try {
       const first = await storeResponse(
         { symbols: [{ code: "NASDAQ:AAPL" }] },
-        { toolName: "search_symbols", store: "json", output_dir: outputDir, requestParams: { query: "apple" } },
+        {
+          toolName: "search_symbols",
+          store: "json",
+          output_dir: outputDir,
+          requestParams: { query: "apple" },
+        },
       );
       const second = await storeResponse(
         { symbols: [{ code: "NASDAQ:TSLA" }] },
-        { toolName: "search_symbols", store: "json", output_dir: outputDir, requestParams: { query: "tesla" } },
+        {
+          toolName: "search_symbols",
+          store: "json",
+          output_dir: outputDir,
+          requestParams: { query: "tesla" },
+        },
       );
 
       assert.ok(first);
@@ -78,7 +88,10 @@ describe("response storage", () => {
       );
 
       assert.ok(stored);
-      assert.equal(await readFile(stored.stored_file, "utf8"), "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n");
+      assert.equal(
+        await readFile(stored.stored_file, "utf8"),
+        "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n",
+      );
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
@@ -86,7 +99,12 @@ describe("response storage", () => {
 
   it("rejects CSV storage for non-series tools", () => {
     assert.throws(
-      () => validateResponseStorage({ toolName: "search_symbols", store: "csv", output_file: "symbols.csv" }),
+      () =>
+        validateResponseStorage({
+          toolName: "search_symbols",
+          store: "csv",
+          output_file: "symbols.csv",
+        }),
       /csv storage is only supported for get_symbol_series/,
     );
   });
