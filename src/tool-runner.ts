@@ -21,8 +21,29 @@ export interface RunApiToolOptions {
   request: ApiToolRequestFn;
 }
 
+const DEFAULT_FILTER_ORIGINAL_OUTPUT_DIR = "./.tmp/insight";
+
+export function validateFilterExpression(filterExpr: string | undefined): string | null {
+  if (!filterExpr?.trim()) return null;
+  try {
+    jsonata(filterExpr);
+    return null;
+  } catch (error: any) {
+    return error?.message ?? String(error);
+  }
+}
+
 export async function runApiTool(options: RunApiToolOptions): Promise<any> {
   const { filter: filterExpr, store, output_file, output_dir, ...apiArgs } = options.args;
+  let filter: ReturnType<typeof jsonata> | null = null;
+  if (filterExpr && typeof filterExpr === "string") {
+    try {
+      filter = jsonata(filterExpr);
+    } catch (error: any) {
+      throw new Error(`Invalid filter: ${error?.message ?? String(error)}`);
+    }
+  }
+
   const storeOptions = {
     toolName: options.toolName,
     store: store as ResponseStoreFormat | undefined,
@@ -43,10 +64,41 @@ export async function runApiTool(options: RunApiToolOptions): Promise<any> {
   const result = await options.request(options.method, options.pathTemplate, apiArgs);
   const stored = await storeResponse(result, storeOptions);
 
-  if (filterExpr && typeof filterExpr === "string") {
-    const expr = jsonata(filterExpr);
-    return await expr.evaluate(result);
+  if (filter) {
+    const filtered = await filter.evaluate(result);
+    if (!isEmptyFilteredResult(filtered)) return filtered;
+
+    const original =
+      stored ?? (await storeEmptyFilterOriginalResponse(result, options.toolName, apiArgs));
+    return {
+      filtered: filtered === undefined ? null : filtered,
+      message: `Filtered data is empty. Original response stored at ${original.stored_file}.`,
+      original_response_file: original.stored_file,
+    };
   }
 
   return stored ?? result;
+}
+
+function isEmptyFilteredResult(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "string") return value.length === 0;
+  if (typeof value === "object") return Object.keys(value).length === 0;
+  return false;
+}
+
+async function storeEmptyFilterOriginalResponse(
+  response: any,
+  toolName: string,
+  requestParams: Record<string, any>,
+) {
+  const stored = await storeResponse(response, {
+    toolName,
+    store: "json",
+    output_dir: DEFAULT_FILTER_ORIGINAL_OUTPUT_DIR,
+    requestParams,
+  });
+  if (!stored) throw new Error("failed to store original response for empty filtered data");
+  return stored;
 }

@@ -21,7 +21,7 @@ import {
 import { analyzeSymbolCodes, shouldPromptSymbolScopedParam } from "./symbol-param-applicability.js";
 import { validateSymbolLikeArg } from "./symbol-validation.js";
 import { type ToolDefinition, toolDefinitions } from "./tool-definitions.js";
-import { runApiTool } from "./tool-runner.js";
+import { runApiTool, validateFilterExpression } from "./tool-runner.js";
 
 export { coerceArgs } from "./arg-coercion.js";
 
@@ -46,6 +46,10 @@ const CSV_STORE_SCHEMA = z
   .describe(
     "Store original API response before filtering. CSV is available for series/history responses. Default: none.",
   );
+const FILTER_SCHEMA = z
+  .string()
+  .optional()
+  .describe("JSONata expression to transform the response. Leave empty for no filter.");
 
 interface ParsedArgs {
   toolName: string | null;
@@ -122,7 +126,7 @@ export function buildHelp(): string {
   lines.push("  insight get_earnings --c US");
   lines.push('  insight list_options --code "NASDAQ:AAPL" --type call --range 10');
   lines.push("");
-  lines.push("All tools support --filter <jsonata> to transform the response.");
+  lines.push("API tools support --filter <jsonata> to transform the response.");
   lines.push("Use: insight <tool> --help for tool-specific parameters.");
   lines.push("");
   lines.push("Authentication:");
@@ -339,6 +343,7 @@ interface CliIO {
   write: (s: string) => void;
   exit: (code: number) => void;
   request?: RequestFn;
+  createRequestFromApiKey?: (apiKey: string) => RequestFn;
   progress?: (s: string) => void;
   prompt?: (question: string) => Promise<string>;
   selectTool?: (options: ToolSelectionOption[]) => Promise<string | null>;
@@ -354,16 +359,24 @@ interface ToolSelectionOption {
   description: string;
 }
 
+interface InteractiveToolResolution {
+  toolName: string;
+  apiKey?: string;
+}
+
 export async function runCli(argv: string[], io: CliIO): Promise<void> {
   let { toolName, args, help } = parseArgs(argv);
+  let sessionApiKey: string | undefined;
 
   if (!toolName) {
     if (!help && io.isInteractive === true && io.prompt) {
-      toolName = await resolveInteractiveToolName(io);
-      if (!toolName) {
+      const selected = await resolveInteractiveToolName(io);
+      if (!selected) {
         io.exit(1);
         return;
       }
+      toolName = selected.toolName;
+      sessionApiKey = selected.apiKey;
     } else {
       io.write(buildHelp());
       io.exit(0);
@@ -425,28 +438,28 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
       return;
     }
 
-    const request = resolveRequest(io);
-    if (!request) {
-      io.write(
-        "Error: No API key found.\n\nSet it with:  insight login --key <your-api-key>\nOr export:    export INSIGHTSENTRY_API_KEY=your-api-key\n\nGet your API key from https://insightsentry.com/dashboard",
-      );
-      io.exit(1);
-      return;
-    }
-
     try {
-      const providedValidationError = validateDownloadHistoryArgs(args);
-      if (providedValidationError) {
-        io.write(
-          `Invalid ${downloadHistoryPromptLabel(providedValidationError.key)}: ${providedValidationError.error}\n`,
-        );
-        io.exit(1);
-        return;
+      const inputArgs = { ...args };
+      const interactive = io.isInteractive === true && Boolean(io.prompt);
+      if (interactive) {
+        for (const error of collectInvalidProvidedDownloadHistoryArgs(inputArgs)) {
+          io.write(`Invalid ${downloadHistoryPromptLabel(error.key)}: ${error.error}\n`);
+          delete inputArgs[error.key];
+        }
+      } else {
+        const providedValidationError = validateDownloadHistoryArgs(inputArgs);
+        if (providedValidationError) {
+          io.write(
+            `Invalid ${downloadHistoryPromptLabel(providedValidationError.key)}: ${providedValidationError.error}\n`,
+          );
+          io.exit(1);
+          return;
+        }
       }
-      const historyArgs = await resolveDownloadHistoryArgs(args, io);
+      const historyArgs = await resolveDownloadHistoryArgs(inputArgs, io);
       if (!historyArgs) {
         io.write(
-          `Error: Missing required options for download_history: ${missingDownloadHistoryArgs(args).join(", ")}\n\nRun: insight download_history --help`,
+          `Error: Missing required options for download_history: ${missingDownloadHistoryArgs(inputArgs).join(", ")}\n\nRun: insight download_history --help`,
         );
         io.exit(1);
         return;
@@ -455,6 +468,14 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
       if (validationError) {
         io.write(
           `Invalid ${downloadHistoryPromptLabel(validationError.key)}: ${validationError.error}\n`,
+        );
+        io.exit(1);
+        return;
+      }
+      const request = resolveRequest(io, sessionApiKey);
+      if (!request) {
+        io.write(
+          "Error: No API key found.\n\nSet it with:  insight login --key <your-api-key>\nOr export:    export INSIGHTSENTRY_API_KEY=your-api-key\n\nGet your API key from https://insightsentry.com/dashboard",
         );
         io.exit(1);
         return;
@@ -492,16 +513,6 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     return;
   }
 
-  // Resolve request function
-  const request = resolveRequest(io);
-  if (!request) {
-    io.write(
-      "Error: No API key found.\n\nSet it with:  insight login --key <your-api-key>\nOr export:    export INSIGHTSENTRY_API_KEY=your-api-key\n\nGet your API key from https://insightsentry.com/dashboard",
-    );
-    io.exit(1);
-    return;
-  }
-
   const inputArgs = { ...args };
   const interactive = io.isInteractive === true && Boolean(io.prompt);
   if (interactive) {
@@ -524,9 +535,25 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
 
   const storeModeError = validateStoreMode(tool.name, inputArgs.store);
   if (storeModeError) {
-    io.write(`Invalid Store: ${storeModeError}\n`);
-    io.exit(1);
-    return;
+    if (interactive) {
+      io.write(`Invalid Store: ${storeModeError}\n`);
+      delete inputArgs.store;
+    } else {
+      io.write(`Invalid Store: ${storeModeError}\n`);
+      io.exit(1);
+      return;
+    }
+  }
+  const filterError = validateFilterExpression(inputArgs.filter);
+  if (filterError) {
+    if (interactive) {
+      io.write(`Invalid Filter: ${filterError}\n`);
+      delete inputArgs.filter;
+    } else {
+      io.write(`Invalid Filter: ${filterError}\n`);
+      io.exit(1);
+      return;
+    }
   }
 
   const resolvedArgs = await resolveToolArgs(inputArgs, tool, io);
@@ -542,6 +569,16 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
   const validationError = validateResolvedToolArgs(resolvedArgs, tool);
   if (validationError) {
     io.write(`Invalid ${toolPromptLabel(validationError.key)}: ${validationError.error}\n`);
+    io.exit(1);
+    return;
+  }
+
+  // Resolve request function
+  const request = resolveRequest(io, sessionApiKey);
+  if (!request) {
+    io.write(
+      "Error: No API key found.\n\nSet it with:  insight login --key <your-api-key>\nOr export:    export INSIGHTSENTRY_API_KEY=your-api-key\n\nGet your API key from https://insightsentry.com/dashboard",
+    );
     io.exit(1);
     return;
   }
@@ -563,18 +600,19 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
   }
 }
 
-async function resolveInteractiveToolName(io: CliIO): Promise<string | null> {
+async function resolveInteractiveToolName(io: CliIO): Promise<InteractiveToolResolution | null> {
+  let apiKey: string | undefined;
   const status = (io.getAuthStatus ?? getAuthStatus)();
   if (!status.authenticated) {
     io.write(status.message);
-    const key = await resolveLoginKey({}, io);
-    if (!key) {
+    apiKey = (await resolveLoginKey({}, io)) ?? undefined;
+    if (!apiKey) {
       io.write(
         "Usage: insight login --key <your-api-key>\n\nGet your API key from https://insightsentry.com/dashboard",
       );
       return null;
     }
-    saveConfig({ apiKey: key });
+    saveConfig({ apiKey });
     io.write(`API key saved to ${getConfigLocation()}`);
   }
 
@@ -582,14 +620,14 @@ async function resolveInteractiveToolName(io: CliIO): Promise<string | null> {
   if (io.selectTool) {
     const selected = await io.selectTool(options);
     if (!selected) io.write("No tool selected.");
-    return selected;
+    return selected ? { toolName: selected, apiKey } : null;
   }
 
   io.write(buildInteractiveToolList(options));
   for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
     const answer = (await io.prompt?.("Choose tool (number or name): "))?.trim() ?? "";
     const selected = parseToolSelection(answer, options);
-    if (selected) return selected;
+    if (selected) return { toolName: selected, apiKey };
     io.write("Invalid tool selection.");
   }
 
@@ -654,10 +692,11 @@ async function resolveLoginKey(args: Record<string, string>, io: CliIO): Promise
   return null;
 }
 
-function resolveRequest(io: CliIO): RequestFn | null {
+function resolveRequest(io: CliIO, apiKeyOverride?: string): RequestFn | null {
   if (io.request) return io.request;
-  const apiKey = resolveApiKey();
+  const apiKey = apiKeyOverride?.trim() || resolveApiKey();
   if (!apiKey) return null;
+  if (io.createRequestFromApiKey) return io.createRequestFromApiKey(apiKey);
   const client = new ApiClient(apiKey);
   return (method, path, params) => client.request(method, path, params);
 }
@@ -699,6 +738,8 @@ async function resolveToolArgs(
     const storageAnswer = await resolveInteractiveStorageMode(resolved, tool.name, io);
     if (storageAnswer === null) return null;
     await resolveStorageDestination(resolved, tool.name, io);
+    const filterAnswer = await resolveInteractiveFilter(resolved, io);
+    if (filterAnswer === null) return null;
   } else if (missingToolArgs(resolved, tool).length > 0) {
     return null;
   }
@@ -722,6 +763,31 @@ async function resolveInteractiveStorageMode(
 
 function storeModeSchema(toolName: string): z.ZodTypeAny {
   return supportsCsvStorage(toolName) ? CSV_STORE_SCHEMA : JSON_STORE_SCHEMA;
+}
+
+async function resolveInteractiveFilter(
+  resolved: Record<string, string>,
+  io: CliIO,
+): Promise<undefined | null> {
+  if (resolved.filter !== undefined) return;
+
+  const answer = await promptForOptionalFilterArg(io);
+  if (answer === null) return null;
+  if (answer !== undefined) resolved.filter = answer;
+}
+
+async function promptForOptionalFilterArg(io: CliIO): Promise<string | undefined | null> {
+  const label = "Filter";
+  const question = optionalPromptQuestion(label, FILTER_SCHEMA);
+  for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
+    const answer = (await io.prompt?.(question))?.trim() ?? "";
+    if (!answer) return undefined;
+
+    const error = validateFilterExpression(answer);
+    if (!error) return answer;
+    io.write(`Invalid ${label}: ${error}\n`);
+  }
+  return null;
 }
 
 function shouldSkipInteractiveToolArg(
@@ -1124,6 +1190,24 @@ function validateDownloadHistoryArgs(
   const historyIntervalError = validateHistoryIntervalArgs(DOWNLOAD_HISTORY_COMMAND, args);
   if (historyIntervalError) return historyIntervalError;
   return null;
+}
+
+function collectInvalidProvidedDownloadHistoryArgs(
+  args: Record<string, string>,
+): Array<{ key: string; error: string }> {
+  const errors: Array<{ key: string; error: string }> = [];
+  for (const key of Object.keys(downloadHistorySchema)) {
+    if (args[key] === undefined) continue;
+    const error = validateDownloadHistoryArgAnswer(key, args[key]);
+    if (error) errors.push({ key, error });
+  }
+
+  if (!errors.some((error) => error.key === "bar_interval")) {
+    const historyIntervalError = validateHistoryIntervalArgs(DOWNLOAD_HISTORY_COMMAND, args);
+    if (historyIntervalError) errors.push(historyIntervalError);
+  }
+
+  return errors;
 }
 
 function downloadHistoryPromptLabel(key: string): string {

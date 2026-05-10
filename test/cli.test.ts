@@ -148,6 +148,12 @@ describe("buildHelp", () => {
     assert.ok(help.includes("get_symbol_series"));
     assert.ok(help.includes("insight whoami"));
   });
+
+  it("describes filter as API-tool only", () => {
+    const help = buildHelp();
+    assert.ok(help.includes("API tools support --filter"));
+    assert.ok(!help.includes("All tools support --filter"));
+  });
 });
 
 describe("buildToolHelp", () => {
@@ -286,6 +292,50 @@ describe("runCli", () => {
     assert.ok(questions.some((question) => question.includes("API key")));
     assert.ok(questions.some((question) => question.includes("Choose tool")));
     assert.equal(loadConfig().apiKey, apiKey);
+    assert.deepEqual(JSON.parse(output.slice(output.lastIndexOf("{"))), { ok: true });
+    assert.equal(exitCode, undefined);
+  });
+
+  it("uses the prompted API key for the current no-args interactive run", async () => {
+    const origKey = process.env.INSIGHTSENTRY_API_KEY;
+    const selectedToolIndex =
+      toolDefinitions.findIndex((tool) => tool.name === "get_fundamentals_meta") + 1;
+    const apiKey = jwt({ uuid: "user@example.com", plan: "ultra" });
+    let requestKey: string | undefined;
+
+    process.env.INSIGHTSENTRY_API_KEY = "bad.env.key";
+    try {
+      await runCli([], {
+        write,
+        exit,
+        isInteractive: true,
+        getAuthStatus: () => ({
+          authenticated: false,
+          source: "environment",
+          config_path: "/tmp/insightsentry/config.json",
+          key_present: true,
+          key_format_valid: false,
+          message: "Logged out. INSIGHTSENTRY_API_KEY is not valid.",
+        }),
+        prompt: async (question) => {
+          if (question.includes("API key")) return apiKey;
+          if (question.includes("Choose tool")) return String(selectedToolIndex);
+          return "";
+        },
+        createRequestFromApiKey: (key) => {
+          requestKey = key;
+          return async () => ({ ok: true });
+        },
+      });
+    } finally {
+      if (origKey === undefined) {
+        delete process.env.INSIGHTSENTRY_API_KEY;
+      } else {
+        process.env.INSIGHTSENTRY_API_KEY = origKey;
+      }
+    }
+
+    assert.equal(requestKey, apiKey);
     assert.deepEqual(JSON.parse(output.slice(output.lastIndexOf("{"))), { ok: true });
     assert.equal(exitCode, undefined);
   });
@@ -777,7 +827,7 @@ describe("runCli", () => {
     assert.ok(questions.some((question) => question.includes("Settlement")));
   });
 
-  it("prompts for storage but not filter by default in interactive mode", async () => {
+  it("prompts for storage and filter by default in interactive mode", async () => {
     const questions: string[] = [];
 
     await runCli(["get_fundamentals_meta"], {
@@ -796,11 +846,39 @@ describe("runCli", () => {
     assert.deepEqual(JSON.parse(output), {
       base: [{ id: "total_revenue" }, { id: "net_income" }],
     });
-    assert.equal(questions.length, 1);
+    assert.equal(questions.length, 2);
     assert.ok(questions[0].includes("Store: Store original API response before filtering."));
     assert.ok(questions[0].includes("Store (optional, choices: none/json"));
     assert.ok(!questions[0].includes("csv"));
-    assert.ok(!questions.some((question) => question.includes("Filter")));
+    assert.ok(questions[1].includes("Filter: JSONata expression to transform the response."));
+    assert.ok(questions[1].includes("Filter (optional, press Enter to skip):"));
+  });
+
+  it("reprompts invalid interactive filters", async () => {
+    const questions: string[] = [];
+    const filters = ["base[", "base.id"];
+
+    await runCli(["get_fundamentals_meta"], {
+      write,
+      exit,
+      request: async () => ({
+        base: [{ id: "total_revenue" }, { id: "net_income" }],
+      }),
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.includes("Filter")) return filters.shift() ?? "";
+        return "";
+      },
+    });
+
+    assert.ok(output.includes("Invalid Filter"));
+    assert.ok(questions.filter((question) => question.includes("Filter")).length >= 2);
+    assert.deepEqual(JSON.parse(output.slice(output.indexOf("["))), [
+      "total_revenue",
+      "net_income",
+    ]);
+    assert.equal(exitCode, undefined);
   });
 
   it("does not prompt for unsupported crypto screener country filters", async () => {
@@ -847,16 +925,17 @@ describe("runCli", () => {
     assert.equal(exitCode, undefined);
   });
 
-  it("rejects impossible storage modes before prompting for destinations", async () => {
+  it("reprompts impossible storage modes in interactive mode", async () => {
     const questions: string[] = [];
 
     await runCli(["search_symbols", "--query", "apple", "--store", "csv"], {
       write,
       exit,
-      request: async () => assert.fail("invalid storage mode should fail before request"),
+      request: async (_method, _pathTemplate, params) => params,
       isInteractive: true,
       prompt: async (question) => {
         questions.push(question);
+        if (question.includes("Store")) return "none";
         return "";
       },
     });
@@ -864,7 +943,26 @@ describe("runCli", () => {
     assert.ok(
       output.includes("csv storage is only supported for get_symbol_series and get_symbol_history"),
     );
-    assert.deepEqual(questions, []);
+    assert.ok(questions.some((question) => question.includes("Store")));
+    assert.deepEqual(JSON.parse(output.slice(output.indexOf("{"))), { query: "apple" });
+    assert.equal(exitCode, undefined);
+  });
+
+  it("reports missing required options before auth in non-interactive mode", async () => {
+    const origKey = process.env.INSIGHTSENTRY_API_KEY;
+    delete process.env.INSIGHTSENTRY_API_KEY;
+    try {
+      await runCli(["get_symbol_info"], {
+        write,
+        exit,
+        isInteractive: false,
+      });
+    } finally {
+      if (origKey !== undefined) process.env.INSIGHTSENTRY_API_KEY = origKey;
+    }
+
+    assert.ok(output.includes("Missing required options for get_symbol_info: symbol"));
+    assert.ok(!output.includes("No API key found"));
     assert.equal(exitCode, 1);
   });
 
@@ -1420,6 +1518,25 @@ describe("runCli", () => {
     }
   });
 
+  it("reports missing download_history options before auth in non-interactive mode", async () => {
+    const origKey = process.env.INSIGHTSENTRY_API_KEY;
+    delete process.env.INSIGHTSENTRY_API_KEY;
+    try {
+      await runCli(["download_history"], {
+        write,
+        exit,
+        isInteractive: false,
+      });
+    } finally {
+      if (origKey !== undefined) process.env.INSIGHTSENTRY_API_KEY = origKey;
+    }
+
+    assert.ok(output.includes("Missing required options for download_history"));
+    assert.ok(output.includes("symbol, bar_type, from, to, output_dir"));
+    assert.ok(!output.includes("No API key found"));
+    assert.equal(exitCode, 1);
+  });
+
   it("prompts for missing download_history arguments when interactive", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
     const questions: string[] = [];
@@ -1458,6 +1575,47 @@ describe("runCli", () => {
             question.includes("Bar type (required, choices: second/minute/hour/day/week/month):"),
         ),
       );
+      assert.ok(!questions.some((question) => question.includes("Filter")));
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores filter for download_history", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
+    try {
+      await runCli(
+        [
+          "download_history",
+          "--symbol",
+          "NASDAQ:AAPL",
+          "--bar_type",
+          "day",
+          "--from",
+          "2024-01",
+          "--to",
+          "2024-02",
+          "--output_dir",
+          outputDir,
+          "--filter",
+          "series.close",
+        ],
+        {
+          write,
+          exit,
+          isInteractive: true,
+          request: async (_method, _path, params) => {
+            assert.equal(params.filter, undefined);
+            return { code: "NASDAQ:AAPL", series: [{ time: 1, close: 10 }] };
+          },
+        },
+      );
+
+      const parsed = JSON.parse(output);
+      assert.equal(parsed.total, 1);
+      assert.equal(parsed.failed, 0);
+      assert.ok(!output.includes("Unsupported download_history option"));
+      assert.equal(exitCode, undefined);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
@@ -1683,6 +1841,51 @@ describe("runCli", () => {
 
       assert.ok(output.includes("Invalid Bar type"));
       assert.ok(output.includes("second, minute, hour, day, week, month"));
+      const parsed = JSON.parse(output.slice(output.indexOf("{")));
+      assert.equal(parsed.failed, 0);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reprompts invalid provided download_history arguments when interactive", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
+    const barTypes = ["minute"];
+
+    try {
+      await runCli(
+        [
+          "download_history",
+          "--symbol",
+          "NASDAQ:AAPL",
+          "--bar_type",
+          "daily",
+          "--from",
+          "2024-01",
+          "--to",
+          "2024-01",
+          "--output_dir",
+          outputDir,
+          "--format",
+          "json",
+        ],
+        {
+          write,
+          exit,
+          isInteractive: true,
+          prompt: async (question) => {
+            if (question.startsWith("Bar type")) return barTypes.shift() ?? "";
+            return "";
+          },
+          request: async () => ({
+            code: "NASDAQ:AAPL",
+            bar_type: "1m",
+            series: [{ time: 1, close: 10 }],
+          }),
+        },
+      );
+
+      assert.ok(output.includes("Invalid Bar type"));
       const parsed = JSON.parse(output.slice(output.indexOf("{")));
       assert.equal(parsed.failed, 0);
     } finally {

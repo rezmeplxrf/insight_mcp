@@ -75,6 +75,94 @@ describe("tool runner", () => {
     }
   });
 
+  it("rejects invalid filters before calling the API or writing storage", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-runner-"));
+    const outputFile = path.join(outputDir, "symbols.json");
+    const request: ApiToolRequestFn = async () =>
+      assert.fail("invalid filter should fail before request");
+
+    try {
+      await assert.rejects(
+        () =>
+          runApiTool({
+            toolName: "search_symbols",
+            method: "GET",
+            pathTemplate: "/symbols",
+            args: {
+              query: "apple",
+              filter: "symbols[",
+              store: "json",
+              output_file: outputFile,
+            },
+            request,
+          }),
+        /filter/i,
+      );
+      await assert.rejects(() => readFile(outputFile, "utf8"), /ENOENT/);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stores the original response in .tmp/insight when filtered data is empty", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "insight-runner-"));
+    const cwd = process.cwd();
+
+    try {
+      process.chdir(tempDir);
+      const result = await runApiTool({
+        toolName: "search_symbols",
+        method: "GET",
+        pathTemplate: "/symbols",
+        args: {
+          query: "apple",
+          filter: "symbols[code='NASDAQ:MSFT']",
+        },
+        request: async () => ({
+          symbols: [{ code: "NASDAQ:AAPL", name: "Apple" }],
+        }),
+      });
+
+      assert.equal(result.filtered, null);
+      assert.ok(result.message.includes("Filtered data is empty"));
+      assert.ok(result.original_response_file.includes(path.join(".tmp", "insight")));
+      assert.deepEqual(JSON.parse(await readFile(result.original_response_file, "utf8")), {
+        symbols: [{ code: "NASDAQ:AAPL", name: "Apple" }],
+      });
+    } finally {
+      process.chdir(cwd);
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the requested storage path when filtered stored data is empty", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-runner-"));
+    const outputFile = path.join(outputDir, "symbols.json");
+
+    try {
+      const result = await runApiTool({
+        toolName: "search_symbols",
+        method: "GET",
+        pathTemplate: "/symbols",
+        args: {
+          query: "apple",
+          filter: "symbols[code='NASDAQ:MSFT']",
+          store: "json",
+          output_file: outputFile,
+        },
+        request: async () => ({
+          symbols: [{ code: "NASDAQ:AAPL", name: "Apple" }],
+        }),
+      });
+
+      assert.equal(result.filtered, null);
+      assert.equal(result.original_response_file, outputFile);
+      assert.ok(result.message.includes(outputFile));
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("stores series CSV and returns filtered data when requested", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-runner-"));
     const outputFile = path.join(outputDir, "series.csv");
