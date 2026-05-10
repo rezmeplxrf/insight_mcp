@@ -1,8 +1,13 @@
 import { z } from "zod";
 import jsonata from "jsonata";
+import { createInterface } from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
 import { ApiClient } from "./api-client.js";
 import { toolDefinitions, type ToolDefinition } from "./tool-definitions.js";
 import { saveConfig, deleteConfig, resolveApiKey, getConfigLocation } from "./config.js";
+import { downloadHistory, type DownloadHistoryOptions } from "./history.js";
+
+const DOWNLOAD_HISTORY_COMMAND = "download_history";
 
 interface ParsedArgs {
   toolName: string | null;
@@ -118,12 +123,14 @@ export function buildHelp(): string {
     const desc = tool.description.split(".")[0]; // first sentence
     lines.push(`  ${tool.name.padEnd(32)} ${desc}`);
   }
+  lines.push(`  ${DOWNLOAD_HISTORY_COMMAND.padEnd(32)} Download historical ranges to JSON/CSV files with concurrency and progress`);
 
   lines.push("");
   lines.push("Quick Start:");
   lines.push('  insight search_symbols --query "apple"');
   lines.push('  insight get_quotes --codes "NASDAQ:AAPL,NASDAQ:MSFT"');
   lines.push('  insight get_symbol_series --symbol "NASDAQ:AAPL" --bar_type day --dp 30');
+  lines.push('  insight download_history --symbol "NASDAQ:AAPL" --bar_type minute --from 2024-01 --to 2024-03 --output_dir ./data --format csv');
   lines.push('  insight screen_stocks --fields "close,volume,market_cap" --exchanges "NYSE,NASDAQ" --sortBy market_cap --sortOrder desc');
   lines.push('  insight get_earnings --c US');
   lines.push('  insight list_options --code "NASDAQ:AAPL" --type call --range 10');
@@ -139,6 +146,37 @@ export function buildHelp(): string {
   lines.push("  Get your API key from https://insightsentry.com/dashboard");
 
   return lines.join("\n");
+}
+
+export function buildDownloadHistoryHelp(): string {
+  return [
+    `insight ${DOWNLOAD_HISTORY_COMMAND}`,
+    "",
+    "Download historical data for a date range and save files locally. second/minute/hour use /history. day/week/month use /series. Continuous futures ending in 1! or 2! are expanded through the contracts endpoint into specific contract codes for second/minute/hour.",
+    "",
+    "Parameters:",
+    "  --symbol                   string   Required. Symbol code, e.g. NASDAQ:AAPL or CME_MINI:NQ1!",
+    "  --bar_type                 enum(second|minute|hour|day|week|month) Required. second uses daily /history requests; minute/hour use monthly /history requests; day/week/month use /series.",
+    "  --from                     string   Required. Start date, YYYY-MM or YYYY-MM-DD.",
+    "  --to                       string   Required. End date, YYYY-MM or YYYY-MM-DD.",
+    "  --output_dir               string   Required. Directory where files will be written.",
+    "  --format                   enum(json|csv|both) [optional] Default: csv.",
+    "  --merge                    boolean [optional] Write one merged CSV when format is csv or both. Default: true.",
+    "  --keep_chunks              boolean [optional] Keep per-request CSV chunk files after merge. Default: false.",
+    "  --concurrency              number [optional] Concurrent history requests, 1-10. Default: 5.",
+    "  --bar_interval             number [optional] Bar interval, 1-1440. Default: 1.",
+    "  --contract_lookback_months number [optional] Futures contract months ending at settlement. Default: 6.",
+    "  --overwrite                boolean [optional] Replace existing output files. Default: false.",
+    "  --extended                 boolean [optional] Pass through to the request.",
+    "  --dadj                     boolean [optional] Pass through to the request.",
+    "  --badj                     boolean [optional] Pass through to the request.",
+    "  --settlement               boolean [optional] Pass through to the request.",
+    "",
+    "Examples:",
+    '  insight download_history --symbol "NASDAQ:AAPL" --bar_type minute --from 2024-01 --to 2024-06 --output_dir ./history --format csv --merge',
+    '  insight download_history --symbol "NASDAQ:AAPL" --bar_type second --from 2024-06-01 --to 2024-06-14 --output_dir ./history --concurrency 5',
+    '  insight download_history --symbol "CME_MINI:NQ1!" --bar_type hour --from 2025-01 --to 2025-12 --output_dir ./futures --format both',
+  ].join("\n");
 }
 
 const toolExamples: Record<string, string[]> = {
@@ -302,7 +340,13 @@ interface CliIO {
   write: (s: string) => void;
   exit: (code: number) => void;
   request?: RequestFn;
+  progress?: (s: string) => void;
+  prompt?: (question: string) => Promise<string>;
+  isInteractive?: boolean;
 }
+
+const REQUIRED_DOWNLOAD_HISTORY_ARGS = ["symbol", "bar_type", "from", "to", "output_dir"] as const;
+type RequiredDownloadHistoryArg = (typeof REQUIRED_DOWNLOAD_HISTORY_ARGS)[number];
 
 export async function runCli(argv: string[], io: CliIO): Promise<void> {
   const { toolName, args, help } = parseArgs(argv);
@@ -334,6 +378,47 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     return;
   }
 
+  if (toolName === DOWNLOAD_HISTORY_COMMAND) {
+    if (help) {
+      io.write(buildDownloadHistoryHelp());
+      io.exit(0);
+      return;
+    }
+
+    const request = resolveRequest(io);
+    if (!request) {
+      io.write("Error: No API key found.\n\nSet it with:  insight login --key <your-api-key>\nOr export:    export INSIGHTSENTRY_API_KEY=your-api-key\n\nGet your API key from https://insightsentry.com/dashboard");
+      io.exit(1);
+      return;
+    }
+
+    try {
+      const historyArgs = await resolveDownloadHistoryArgs(args, io);
+      if (!historyArgs) {
+        io.write(
+          `Error: Missing required options for download_history: ${missingDownloadHistoryArgs(args).join(", ")}\n\nRun: insight download_history --help`,
+        );
+        io.exit(1);
+        return;
+      }
+      const result = await downloadHistory(parseDownloadHistoryArgs(historyArgs), {
+        request,
+        onProgress: (event) => {
+          const target = event.files.length ? ` -> ${event.files.join(", ")}` : "";
+          const error = event.error ? ` (${event.error})` : "";
+          io.progress?.(
+            `[${event.completed}/${event.total}] ${event.status} ${event.symbol} ${event.start_date}${target}${error}`,
+          );
+        },
+      });
+      io.write(JSON.stringify(result, null, 2));
+    } catch (error: any) {
+      io.write(`Error: ${error.message}\n`);
+      io.exit(1);
+    }
+    return;
+  }
+
   // Find tool
   const tool = toolDefinitions.find((t) => t.name === toolName);
   if (!tool) {
@@ -350,18 +435,11 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
   }
 
   // Resolve request function
-  let request: RequestFn;
-  if (io.request) {
-    request = io.request;
-  } else {
-    const apiKey = resolveApiKey();
-    if (!apiKey) {
-      io.write("Error: No API key found.\n\nSet it with:  insight login --key <your-api-key>\nOr export:    export INSIGHTSENTRY_API_KEY=your-api-key\n\nGet your API key from https://insightsentry.com/dashboard");
-      io.exit(1);
-      return;
-    }
-    const client = new ApiClient(apiKey);
-    request = (method, path, params) => client.request(method, path, params);
+  const request = resolveRequest(io);
+  if (!request) {
+    io.write("Error: No API key found.\n\nSet it with:  insight login --key <your-api-key>\nOr export:    export INSIGHTSENTRY_API_KEY=your-api-key\n\nGet your API key from https://insightsentry.com/dashboard");
+    io.exit(1);
+    return;
   }
 
   const { filter: filterExpr, ...apiArgs } = coerceArgs(args, tool.schema);
@@ -382,9 +460,79 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
   }
 }
 
+function resolveRequest(io: CliIO): RequestFn | null {
+  if (io.request) return io.request;
+  const apiKey = resolveApiKey();
+  if (!apiKey) return null;
+  const client = new ApiClient(apiKey);
+  return (method, path, params) => client.request(method, path, params);
+}
+
+function missingDownloadHistoryArgs(args: Record<string, string>): RequiredDownloadHistoryArg[] {
+  return REQUIRED_DOWNLOAD_HISTORY_ARGS.filter((key) => !args[key]);
+}
+
+async function resolveDownloadHistoryArgs(
+  args: Record<string, string>,
+  io: CliIO,
+): Promise<Record<string, string> | null> {
+  const missing = missingDownloadHistoryArgs(args);
+  if (missing.length === 0) return args;
+  if (io.isInteractive !== true || !io.prompt) return null;
+
+  const resolved = { ...args };
+  for (const key of missing) {
+    const answer = (await io.prompt(`${downloadHistoryPromptLabel(key)}: `)).trim();
+    if (answer) resolved[key] = answer;
+  }
+
+  return missingDownloadHistoryArgs(resolved).length === 0 ? resolved : null;
+}
+
+function downloadHistoryPromptLabel(key: RequiredDownloadHistoryArg): string {
+  switch (key) {
+    case "symbol":
+      return "Symbol";
+    case "bar_type":
+      return "Bar type (second/minute/hour/day/week/month)";
+    case "from":
+      return "From";
+    case "to":
+      return "To";
+    case "output_dir":
+      return "Output directory";
+  }
+}
+
+function parseDownloadHistoryArgs(args: Record<string, string>): DownloadHistoryOptions {
+  const options: DownloadHistoryOptions = {
+    symbol: args.symbol,
+    from: args.from,
+    to: args.to,
+    bar_type: args.bar_type as DownloadHistoryOptions["bar_type"],
+    output_dir: args.output_dir,
+  };
+
+  for (const key of ["bar_interval", "concurrency", "contract_lookback_months"] as const) {
+    if (args[key] !== undefined) options[key] = Number(args[key]);
+  }
+  for (const key of ["overwrite", "merge", "keep_chunks", "extended", "dadj", "badj", "settlement"] as const) {
+    if (args[key] !== undefined) options[key] = args[key] === "true";
+  }
+  if (args.format !== undefined) {
+    options.format = args.format as DownloadHistoryOptions["format"];
+  }
+
+  return options;
+}
+
 export function main() {
+  const rl = createInterface({ input, output });
   runCli(process.argv.slice(2), {
     write: (s) => process.stdout.write(s + "\n"),
+    progress: (s) => process.stderr.write(s + "\n"),
+    prompt: (question) => rl.question(question),
+    isInteractive: process.stdin.isTTY && process.stdout.isTTY && process.env.CI !== "true",
     exit: (code) => process.exit(code),
-  });
+  }).finally(() => rl.close());
 }

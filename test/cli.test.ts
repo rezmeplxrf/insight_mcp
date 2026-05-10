@@ -1,5 +1,8 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { parseArgs, coerceArgs, buildHelp, buildToolHelp, runCli } from "../src/cli.js";
 import { toolDefinitions } from "../src/tool-definitions.js";
 
@@ -213,6 +216,83 @@ describe("runCli", () => {
     const parsed = JSON.parse(output);
     assert.deepEqual(parsed, { symbols: [{ code: "NASDAQ:AAPL" }] });
     assert.equal(exitCode, undefined);
+  });
+
+  it("downloads history through the built-in command", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
+    const progress: string[] = [];
+    try {
+      await runCli(
+        [
+          "download_history",
+          "--symbol", "NASDAQ:AAPL",
+          "--bar_type", "minute",
+          "--from", "2024-01",
+          "--to", "2024-01",
+          "--output_dir", outputDir,
+          "--format", "json",
+          "--merge", "true",
+        ],
+        {
+          write,
+          exit,
+          progress: (message) => progress.push(message),
+          request: async () => ({ series: [{ time: 1, close: 10 }] }),
+        },
+      );
+
+      const parsed = JSON.parse(output);
+      assert.equal(parsed.total, 1);
+      assert.equal(parsed.completed, 1);
+      assert.equal(parsed.failed, 0);
+      assert.ok(progress.some((message) => message.includes("saved NASDAQ:AAPL 2024-01")));
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prompts for missing download_history arguments when interactive", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
+    const answers = new Map([
+      ["Symbol: ", "NASDAQ:AAPL"],
+      ["Bar type (second/minute/hour/day/week/month): ", "minute"],
+      ["From: ", "2024-01"],
+      ["To: ", "2024-01"],
+      ["Output directory: ", outputDir],
+    ]);
+
+    try {
+      await runCli(["download_history"], {
+        write,
+        exit,
+        isInteractive: true,
+        prompt: async (question) => answers.get(question) ?? "",
+        request: async () => ({
+          code: "NASDAQ:AAPL",
+          bar_type: "1m",
+          series: [{ time: 1, close: 10 }],
+        }),
+      });
+
+      const parsed = JSON.parse(output);
+      assert.equal(parsed.total, 1);
+      assert.equal(parsed.failed, 0);
+      assert.ok(parsed.merged_file.endsWith("merged.csv"));
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails on missing download_history arguments when non-interactive", async () => {
+    await runCli(["download_history"], {
+      write,
+      exit,
+      isInteractive: false,
+      request: async () => assert.fail("missing required args should fail before request"),
+    });
+
+    assert.ok(output.includes("Missing required options"));
+    assert.equal(exitCode, 1);
   });
 
   it("applies JSONata filter", async () => {

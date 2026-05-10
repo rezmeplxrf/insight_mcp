@@ -374,6 +374,7 @@ async function generate(): Promise<void> {
         }
         // Inject extra params after the specified param
         for (const { after, param } of EXTRA_TOOL_PARAMS[toolName]) {
+          if (params.some((p) => p.name === param.name)) continue;
           const idx = params.findIndex((p) => p.name === after);
           if (idx !== -1) {
             params.splice(idx + 1, 0, param);

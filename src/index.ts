@@ -6,6 +6,7 @@ import { ApiClient } from "./api-client.js";
 import { toolDefinitions } from "./tool-definitions.js";
 import { docResources } from "./resources.js";
 import { renderChart } from "./chart.js";
+import { downloadHistory } from "./history.js";
 
 const INSTRUCTIONS = `You are connected to the InsightSentry financial data API. You have access to real-time and historical market data for equities, futures, options, crypto, forex, and more.
 
@@ -53,6 +54,7 @@ If you're unsure about a symbol code, search for it: \`search_symbols({ query: "
 
 ### "Deep historical / futures data"
 - \`get_symbol_history\` — 20+ years of data (requires start_date: YYYY-MM-DD for second bars returns one day, YYYY-MM for minute/hour bars returns one month)
+- \`download_history\` — Ranged history downloader that saves JSON/CSV files locally, expands second bars into daily /history requests, minute/hour into monthly /history requests, uses /series for day/week/month, and auto-expands continuous futures ending in 1! or 2! through contracts for second/minute/hour.
 - \`get_symbol_contracts\` — List futures contracts with settlement dates
 - For extensive futures history, use specific contract codes (e.g., CME_MINI:NQH2024), not continuous (CME_MINI:NQ1!)
 
@@ -66,7 +68,7 @@ If you're unsure about a symbol code, search for it: \`search_symbols({ query: "
 2. \`get_document\` — Read a specific document's content
 
 ### "Help the user build an app with our API"
-Read the documentation resources for comprehensive guides:
+Read the documentation resources for endpoint details and examples:
 - \`insightsentry://docs/rest-api\` — Full REST API reference with all endpoints
 - \`insightsentry://docs/websocket\` — WebSocket connection, authentication, subscriptions, data formats, Python/JS examples
 - \`insightsentry://docs/screener\` — Screener field discovery and filtering patterns
@@ -82,7 +84,7 @@ Read the documentation resources for comprehensive guides:
 - **WebSocket**: For real-time streaming, read the websocket resource. Two endpoints: /live (market data) and /newsfeed (news).
 
 ## Handling Large Responses — Use \`filter\` (JSONata)
-API responses can be large (e.g., 30k bars of time series, hundreds of fundamental fields, full screener pages). **Every tool supports an optional \`filter\` parameter** that accepts a [JSONata](https://jsonata.org) expression. The filter is applied server-side before the response reaches you, so you only receive the data you need — drastically reducing token usage.
+API responses can be large (e.g., 30k bars of time series, hundreds of fundamental fields, full screener pages). **Every tool supports an optional \`filter\` parameter** that accepts a [JSONata](https://jsonata.org) expression. The filter is applied server-side before the response reaches you, so you only receive the data you need.
 
 **Always use \`filter\` when you don't need the full response.** Only omit it when the user explicitly asks for raw data or when debugging.
 
@@ -105,7 +107,7 @@ Examples:
 - \`screen_stocks({ fields: ["close", "volume", "market_cap", "change_percent"], filter: "data[change_percent][change_percent > 0].{ \"name\": name, \"change_percent\": change_percent }" })\` — only gainers (first predicate filters out nulls)
 - \`get_documents({ code: "NASDAQ:AAPL", filter: "$[form=\"10-K\" or form=\"10-Q\"].{ \"id\": id, \"title\": title, \"form\": form }" })\` — only SEC filings (10-K/10-Q)
 
-Also prefer API-level filtering when available (screener field selection, option \`type\`/\`range\` filters) — combine with \`filter\` for maximum efficiency.
+Also prefer API-level filtering when available (screener field selection, option \`type\`/\`range\` filters), then combine it with \`filter\` when you need additional shaping.
 
 ### Screener Recipes
 Screener fields are limited to 10 per request — pick the most relevant ones and use \`filter\` to narrow and reshape results.
@@ -253,6 +255,85 @@ for (const tool of toolDefinitions) {
     },
   );
 }
+
+// Register ranged history downloader tool
+server.registerTool(
+  "download_history",
+  {
+    description:
+      "Download historical data over a from/to date range and save files locally as JSON, CSV, or both. second bars create one /history request per day, minute/hour bars create one /history request per month, and day/week/month bars use one /series request with dp=30000 and date filtering. Continuous futures ending in 1! or 2! are detected automatically and expanded to specific contract codes for second/minute/hour. Shows progress in the final summary and supports concurrency 1-10, default 5.",
+    inputSchema: {
+      symbol: z
+        .string()
+        .describe("Symbol code in EXCHANGE:SYMBOL format, e.g. NASDAQ:AAPL or CME_MINI:NQ1!"),
+      from: z
+        .string()
+        .describe("Start date. Use YYYY-MM or YYYY-MM-DD."),
+      to: z
+        .string()
+        .describe("End date. Use YYYY-MM or YYYY-MM-DD."),
+      bar_type: z
+        .enum(["second", "minute", "hour", "day", "week", "month"])
+        .describe("Bar type. second/minute/hour use /history; day/week/month use /series."),
+      output_dir: z.string().describe("Directory where downloaded files should be stored."),
+      bar_interval: z.number().int().min(1).max(1440).optional(),
+      format: z.enum(["json", "csv", "both"]).default("csv").optional(),
+      merge: z
+        .boolean()
+        .default(true)
+        .optional()
+        .describe("Write one merged CSV file for the whole run when format is csv or both. Default is true."),
+      keep_chunks: z
+        .boolean()
+        .default(false)
+        .optional()
+        .describe("Keep per-request CSV chunk files after merged CSV is written. Default is false."),
+      concurrency: z.number().int().min(1).max(10).default(5).optional(),
+      contract_lookback_months: z.number().int().min(1).default(6).optional(),
+      overwrite: z.boolean().default(false).optional(),
+      extended: z.boolean().optional(),
+      dadj: z.boolean().optional(),
+      badj: z.boolean().optional(),
+      settlement: z.boolean().optional(),
+    },
+  },
+  async (args: any) => {
+    if (!client) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Error: ${apiKeyError}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    try {
+      const progress: string[] = [];
+      const result = await downloadHistory(args, {
+        request: (method, path, params) => client!.request(method, path, params),
+        onProgress: (event) => {
+          progress.push(`[${event.completed}/${event.total}] ${event.status} ${event.symbol} ${event.start_date}`);
+        },
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ ...result, progress }, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+        isError: true,
+      };
+    }
+  },
+);
 
 // Register chart rendering tool
 server.registerTool(
