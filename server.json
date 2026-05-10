@@ -6,7 +6,7 @@
     "url": "https://github.com/rezmeplxrf/insight_mcp",
     "source": "github"
   },
-  "version": "1.4.0",
+  "version": "1.4.6",
   "packages": [
     {
       "registryType": "npm",
