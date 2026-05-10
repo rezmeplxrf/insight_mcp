@@ -1,6 +1,6 @@
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
-import type { z } from "zod";
+import { z } from "zod";
 import { ApiClient } from "./api-client.js";
 import { coerceArgs, getZodEnumValues, getZodTypeName, isOptionalZodType } from "./arg-coercion.js";
 import { type AuthStatus, getAuthStatus } from "./auth-status.js";
@@ -15,6 +15,19 @@ export { coerceArgs } from "./arg-coercion.js";
 
 const DOWNLOAD_HISTORY_COMMAND = "download_history";
 const MAX_INTERACTIVE_PROMPT_ATTEMPTS = 3;
+const COMMON_TOOL_OPTION_SCHEMA: Record<string, z.ZodTypeAny> = {
+  filter: z.string().describe("JSONata expression to transform the response").optional(),
+  store: z
+    .enum(["none", "json", "csv"])
+    .default("none")
+    .describe("Store the response instead of printing it. Default is none.")
+    .optional(),
+  output_file: z.string().describe("File path for stored response.").optional(),
+  output_dir: z
+    .string()
+    .describe("Directory for stored response when output_file is not set.")
+    .optional(),
+};
 
 interface ParsedArgs {
   toolName: string | null;
@@ -512,24 +525,45 @@ async function resolveToolArgs(
         resolved[key] = answer;
       }
     }
+    await resolveCommonToolOptions(resolved, io);
   } else if (missingToolArgs(resolved, tool).length > 0) {
     return null;
   }
 
   if (missingToolArgs(resolved, tool).length > 0) return null;
 
-  if (
-    io.isInteractive === true &&
-    io.prompt &&
-    isStoreEnabled(resolved.store) &&
-    !resolved.output_file &&
-    !resolved.output_dir
-  ) {
-    const answer = (await io.prompt("Output file: ")).trim();
-    if (answer) resolved.output_file = answer;
+  return resolved;
+}
+
+async function resolveCommonToolOptions(
+  resolved: Record<string, string>,
+  io: CliIO,
+): Promise<void> {
+  for (const key of ["filter", "store"] as const) {
+    if (resolved[key] !== undefined) continue;
+    const answer = await promptForOptionalToolArg(key, COMMON_TOOL_OPTION_SCHEMA[key], io);
+    if (answer !== null && answer !== undefined) resolved[key] = answer;
   }
 
-  return resolved;
+  if (!isStoreEnabled(resolved.store)) return;
+
+  if (!resolved.output_file) {
+    const answer = await promptForOptionalToolArg(
+      "output_file",
+      COMMON_TOOL_OPTION_SCHEMA.output_file,
+      io,
+    );
+    if (answer !== null && answer !== undefined) resolved.output_file = answer;
+  }
+
+  if (!resolved.output_file && !resolved.output_dir) {
+    const answer = await promptForOptionalToolArg(
+      "output_dir",
+      COMMON_TOOL_OPTION_SCHEMA.output_dir,
+      io,
+    );
+    if (answer !== null && answer !== undefined) resolved.output_dir = answer;
+  }
 }
 
 function isStoreEnabled(value: string | undefined): boolean {

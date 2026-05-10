@@ -354,6 +354,41 @@ describe("runCli", () => {
     assert.ok(questions.some((question) => question.includes("Default: false")));
   });
 
+  it("prompts for common tool options in interactive mode", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-common-"));
+    const outputFile = path.join(outputDir, "meta.json");
+    const questions: string[] = [];
+
+    try {
+      await runCli(["get_fundamentals_meta"], {
+        write,
+        exit,
+        request: async () => ({
+          base: [{ id: "total_revenue" }, { id: "net_income" }],
+        }),
+        isInteractive: true,
+        prompt: async (question) => {
+          questions.push(question);
+          if (question.includes("Filter")) return "base.id";
+          if (question.includes("Store")) return "json";
+          if (question.includes("Output File")) return outputFile;
+          return "";
+        },
+      });
+
+      assert.deepEqual(JSON.parse(output), ["total_revenue", "net_income"]);
+      assert.deepEqual(JSON.parse(await readFile(outputFile, "utf8")), {
+        base: [{ id: "total_revenue" }, { id: "net_income" }],
+      });
+      assert.ok(questions.some((question) => question.includes("Filter")));
+      assert.ok(questions.some((question) => question.includes("Store")));
+      assert.ok(questions.some((question) => question.includes("Default: none")));
+      assert.ok(questions.some((question) => question.includes("Output File")));
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("validates provided tool arguments before calling the API", async () => {
     await runCli(["get_symbol_history", "--symbol", "NASDAQ:AAPL", "--bar_type", "daily"], {
       write,
@@ -554,7 +589,6 @@ describe("runCli", () => {
   it("prompts for an output file when storage is enabled interactively", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-store-"));
     const outputFile = path.join(outputDir, "series.csv");
-    const answers = new Map([["Output file: ", outputFile]]);
 
     try {
       const mockRequest = async () => ({
@@ -568,7 +602,7 @@ describe("runCli", () => {
           write,
           exit,
           isInteractive: true,
-          prompt: async (question) => answers.get(question) ?? "",
+          prompt: async (question) => (question.includes("Output File") ? outputFile : ""),
           request: mockRequest,
         },
       );
