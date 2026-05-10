@@ -447,9 +447,11 @@ describe("runCli", () => {
       questions.some(
         (question) =>
           question.includes("W: Specifies the week range.") &&
+          question.includes("and so on.") &&
           question.includes("W (optional, type: number, press Enter to skip):"),
       ),
     );
+    assert.ok(!questions.some((question) => question.includes("...")));
   });
 
   it("requires date range prompts interactively when expiration is skipped", async () => {

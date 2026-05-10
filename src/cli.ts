@@ -1087,7 +1087,7 @@ function getPromptHint(zodType: z.ZodTypeAny): string | null {
     .trim();
 
   if (!hint) return null;
-  return hint.length > 120 ? `${hint.slice(0, 117).trimEnd()}...` : hint;
+  return hint;
 }
 
 export function main() {
