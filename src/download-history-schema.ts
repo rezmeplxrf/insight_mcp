@@ -19,7 +19,11 @@ export const downloadHistorySchema: Record<string, z.ZodTypeAny> = {
   to: z.string().describe("End date. Use YYYY-MM or YYYY-MM-DD."),
   output_dir: z.string().describe("Directory where downloaded files should be stored."),
   bar_interval: z.number().int().min(1).max(1440).describe("Bar interval. Default: 1.").optional(),
-  format: z.enum(DOWNLOAD_HISTORY_FORMATS).default("csv").optional(),
+  format: z
+    .enum(DOWNLOAD_HISTORY_FORMATS)
+    .default("csv")
+    .optional()
+    .describe("Output file format. Use both to write JSON chunks and CSV output. Default is csv."),
   merge: z
     .boolean()
     .default(true)
@@ -32,9 +36,32 @@ export const downloadHistorySchema: Record<string, z.ZodTypeAny> = {
     .default(false)
     .optional()
     .describe("Keep per-request CSV chunk files after merged CSV is written. Default is false."),
-  concurrency: z.number().int().min(1).max(10).default(5).optional(),
-  contract_lookback_months: z.number().int().min(1).default(6).optional(),
-  overwrite: z.boolean().default(false).optional(),
+  concurrency: z
+    .number()
+    .int()
+    .min(1)
+    .max(10)
+    .default(5)
+    .optional()
+    .describe(
+      "Concurrent API requests. Higher values can finish faster but may hit rate limits. Default is 5.",
+    ),
+  contract_lookback_months: z
+    .number()
+    .int()
+    .min(1)
+    .default(6)
+    .optional()
+    .describe(
+      "Months of prior contracts to include when expanding continuous futures. Default is 6.",
+    ),
+  overwrite: z
+    .boolean()
+    .default(false)
+    .optional()
+    .describe(
+      "Replace existing output files instead of resuming or skipping matching chunks. Default is false.",
+    ),
   extended: z.boolean().default(true).optional().describe("Extended hours. Default is true."),
   split: z
     .boolean()

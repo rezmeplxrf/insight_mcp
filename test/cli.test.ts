@@ -360,7 +360,6 @@ describe("runCli", () => {
   });
 
   it("prompts for missing required tool arguments when interactive", async () => {
-    const answers = new Map([["Symbol: ", "NASDAQ:AAPL"]]);
     const mockRequest = async (
       _method: string,
       _pathTemplate: string,
@@ -374,12 +373,206 @@ describe("runCli", () => {
       exit,
       request: mockRequest,
       isInteractive: true,
-      prompt: async (question) => answers.get(question) ?? "",
+      prompt: async (question) => {
+        if (question.startsWith("Symbol")) return "NASDAQ:AAPL";
+        return "";
+      },
+    });
+
+    const parsed = JSON.parse(output.slice(output.indexOf("{")));
+    assert.deepEqual(parsed, { code: "NASDAQ:AAPL" });
+    assert.equal(exitCode, undefined);
+  });
+
+  it("shows choices and schema hints for required interactive tool arguments", async () => {
+    const questions: string[] = [];
+    const mockRequest = async (
+      _method: string,
+      _pathTemplate: string,
+      params: Record<string, any>,
+    ) => params;
+
+    await runCli(["get_symbol_history"], {
+      write,
+      exit,
+      request: mockRequest,
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.startsWith("Symbol")) return "NASDAQ:AAPL";
+        if (question.startsWith("Bar Type")) return "minute";
+        if (question.startsWith("Start Date")) return "2024-01";
+        return "";
+      },
     });
 
     const parsed = JSON.parse(output);
-    assert.deepEqual(parsed, { code: "NASDAQ:AAPL" });
-    assert.equal(exitCode, undefined);
+    assert.equal(parsed.symbol, "NASDAQ:AAPL");
+    assert.equal(parsed.bar_type, "minute");
+    assert.equal(parsed.start_date, "2024-01");
+    assert.ok(
+      questions.some(
+        (question) =>
+          question.includes("Bar Type: Bar type.") &&
+          question.includes("Bar Type (required, choices: second/minute/hour):"),
+      ),
+    );
+    assert.ok(
+      questions.some(
+        (question) =>
+          question.includes("Start Date: Starting period in YYYY-MM format") &&
+          question.includes("Start Date (required):"),
+      ),
+    );
+  });
+
+  it("shows concise descriptions separately from optional prompt instructions", async () => {
+    const questions: string[] = [];
+
+    await runCli(["get_dividends"], {
+      write,
+      exit,
+      request: async (_method, _pathTemplate, params) => params,
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.startsWith("W:")) return "2";
+        return "";
+      },
+    });
+
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.w, 2);
+    assert.ok(
+      questions.some(
+        (question) =>
+          question.includes("W: Specifies the week range.") &&
+          question.includes("W (optional, type: number, press Enter to skip):"),
+      ),
+    );
+  });
+
+  it("requires date range prompts interactively when expiration is skipped", async () => {
+    const questions: string[] = [];
+    const mockRequest = async (
+      _method: string,
+      _pathTemplate: string,
+      params: Record<string, any>,
+    ) => params;
+
+    await runCli(["get_options_expiration", "--code", "NASDAQ:AAPL"], {
+      write,
+      exit,
+      request: mockRequest,
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.startsWith("From")) return "2026-06-01";
+        if (question.startsWith("To")) return "2026-07-01";
+        return "";
+      },
+    });
+
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.code, "NASDAQ:AAPL");
+    assert.equal(parsed.from, "2026-06-01");
+    assert.equal(parsed.to, "2026-07-01");
+    assert.ok(
+      questions.some(
+        (question) =>
+          question.startsWith("Expiration") &&
+          question.includes("optional") &&
+          question.includes("Expiration: Exact expiration date") &&
+          question.includes("Expiration (optional, press Enter to skip):"),
+      ),
+    );
+    assert.ok(
+      questions.some((question) => question.startsWith("From") && question.includes("required")),
+    );
+    assert.ok(
+      questions.some((question) => question.startsWith("To") && question.includes("required")),
+    );
+    assert.ok(!output.includes("Invalid Expiration"));
+  });
+
+  it("skips interactive date range prompts when expiration is provided", async () => {
+    const questions: string[] = [];
+    const mockRequest = async (
+      _method: string,
+      _pathTemplate: string,
+      params: Record<string, any>,
+    ) => params;
+
+    await runCli(["get_options_expiration", "--code", "NASDAQ:AAPL"], {
+      write,
+      exit,
+      request: mockRequest,
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.startsWith("Expiration")) return "2026-06-19";
+        return "";
+      },
+    });
+
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.expiration, "2026-06-19");
+    assert.ok(!questions.some((question) => question.startsWith("From")));
+    assert.ok(!questions.some((question) => question.startsWith("To")));
+  });
+
+  it("requires range interactively when strike is skipped", async () => {
+    const questions: string[] = [];
+    const mockRequest = async (
+      _method: string,
+      _pathTemplate: string,
+      params: Record<string, any>,
+    ) => params;
+
+    await runCli(["get_options_strike", "--code", "NASDAQ:AAPL"], {
+      write,
+      exit,
+      request: mockRequest,
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.startsWith("Range")) return "5";
+        return "";
+      },
+    });
+
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.range, 5);
+    assert.ok(questions.some((question) => question.startsWith("Strike")));
+    assert.ok(
+      questions.some((question) => question.startsWith("Range") && question.includes("required")),
+    );
+    assert.ok(!output.includes("Invalid Strike"));
+  });
+
+  it("skips interactive range prompt when strike is provided", async () => {
+    const questions: string[] = [];
+    const mockRequest = async (
+      _method: string,
+      _pathTemplate: string,
+      params: Record<string, any>,
+    ) => params;
+
+    await runCli(["get_options_strike", "--code", "NASDAQ:AAPL"], {
+      write,
+      exit,
+      request: mockRequest,
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.startsWith("Strike")) return "250";
+        return "";
+      },
+    });
+
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.strike, 250);
+    assert.ok(!questions.some((question) => question.startsWith("Range")));
   });
 
   it("prompts for optional tool arguments in interactive mode and shows defaults", async () => {
@@ -534,6 +727,83 @@ describe("runCli", () => {
     assert.deepEqual(questions, []);
   });
 
+  it("does not prompt for unsupported crypto screener country filters", async () => {
+    const questions: string[] = [];
+
+    await runCli(["screen_crypto"], {
+      write,
+      exit,
+      request: async (_method, _pathTemplate, params) => params,
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.startsWith("Fields")) return "close,volume";
+        return "";
+      },
+    });
+
+    const parsed = JSON.parse(output);
+    assert.deepEqual(parsed.fields, ["close", "volume"]);
+    assert.ok(!questions.some((question) => question.startsWith("Countries")));
+  });
+
+  it("reprompts invalid provided tool arguments when interactive", async () => {
+    const questions: string[] = [];
+
+    await runCli(["get_symbol_history", "--symbol", "NASDAQ:AAPL", "--bar_type", "daily"], {
+      write,
+      exit,
+      request: async (_method, _pathTemplate, params) => params,
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.startsWith("Bar Type")) return "minute";
+        if (question.startsWith("Start Date")) return "2024-01";
+        return "";
+      },
+    });
+
+    const parsed = JSON.parse(output.slice(output.indexOf("{")));
+    assert.equal(parsed.bar_type, "minute");
+    assert.equal(parsed.start_date, "2024-01");
+    assert.ok(output.includes("Invalid Bar Type"));
+    assert.ok(questions.some((question) => question.startsWith("Bar Type")));
+    assert.equal(exitCode, undefined);
+  });
+
+  it("rejects impossible storage modes before prompting for destinations", async () => {
+    const questions: string[] = [];
+
+    await runCli(["search_symbols", "--query", "apple", "--store", "csv"], {
+      write,
+      exit,
+      request: async () => assert.fail("invalid storage mode should fail before request"),
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        return "";
+      },
+    });
+
+    assert.ok(output.includes("csv storage is only supported for get_symbol_series"));
+    assert.deepEqual(questions, []);
+    assert.equal(exitCode, 1);
+  });
+
+  it("reports dynamic option requirements clearly when interactive prompts are left blank", async () => {
+    await runCli(["get_options_strike", "--code", "NASDAQ:AAPL"], {
+      write,
+      exit,
+      request: async () => assert.fail("missing strike/range should fail before request"),
+      isInteractive: true,
+      prompt: async () => "",
+    });
+
+    assert.ok(output.includes("Missing required options for get_options_strike"));
+    assert.ok(output.includes("strike or range"));
+    assert.equal(exitCode, 1);
+  });
+
   it("validates provided tool arguments before calling the API", async () => {
     await runCli(["get_symbol_history", "--symbol", "NASDAQ:AAPL", "--bar_type", "daily"], {
       write,
@@ -609,6 +879,33 @@ describe("runCli", () => {
 
     assert.ok(output.includes("Invalid Codes"));
     assert.ok(output.includes("AAPL"));
+    assert.equal(exitCode, 1);
+  });
+
+  it("validates missing option expiration filters before calling the API", async () => {
+    await runCli(["get_options_expiration", "--code", "NASDAQ:AAPL"], {
+      write,
+      exit,
+      request: async () => assert.fail("missing option filters should fail before request"),
+    });
+
+    assert.ok(output.includes("Invalid Expiration"));
+    assert.ok(output.includes("expiration"));
+    assert.ok(output.includes("from"));
+    assert.ok(output.includes("to"));
+    assert.equal(exitCode, 1);
+  });
+
+  it("validates missing option strike filters before calling the API", async () => {
+    await runCli(["get_options_strike", "--code", "NASDAQ:AAPL"], {
+      write,
+      exit,
+      request: async () => assert.fail("missing option filters should fail before request"),
+    });
+
+    assert.ok(output.includes("Invalid Strike"));
+    assert.ok(output.includes("strike"));
+    assert.ok(output.includes("range"));
     assert.equal(exitCode, 1);
   });
 
@@ -953,20 +1250,22 @@ describe("runCli", () => {
 
   it("prompts for missing download_history arguments when interactive", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
-    const answers = new Map([
-      ["Symbol: ", "NASDAQ:AAPL"],
-      ["Bar type (second/minute/hour/day/week/month): ", "minute"],
-      ["From (YYYY-MM or YYYY-MM-DD): ", "2024-01"],
-      ["To (YYYY-MM or YYYY-MM-DD): ", "2024-01"],
-      ["Output directory: ", outputDir],
-    ]);
+    const questions: string[] = [];
 
     try {
       await runCli(["download_history"], {
         write,
         exit,
         isInteractive: true,
-        prompt: async (question) => answers.get(question) ?? "",
+        prompt: async (question) => {
+          questions.push(question);
+          if (question.startsWith("Symbol")) return "NASDAQ:AAPL";
+          if (question.startsWith("Bar type")) return "minute";
+          if (question.startsWith("From")) return "2024-01";
+          if (question.startsWith("To")) return "2024-01";
+          if (question.startsWith("Output directory")) return outputDir;
+          return "";
+        },
         request: async () => ({
           code: "NASDAQ:AAPL",
           bar_type: "1m",
@@ -978,6 +1277,15 @@ describe("runCli", () => {
       assert.equal(parsed.total, 1);
       assert.equal(parsed.failed, 0);
       assert.ok(parsed.merged_file.endsWith("merged.csv"));
+      assert.ok(
+        questions.some(
+          (question) =>
+            question.includes(
+              "Bar type: Bar type. second/minute/hour use /history; day/week/month use /series.",
+            ) &&
+            question.includes("Bar type (required, choices: second/minute/hour/day/week/month):"),
+        ),
+      );
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
@@ -989,12 +1297,6 @@ describe("runCli", () => {
     const validOutputDir = path.join(tempDir, "valid-output");
     const outputDirAnswers = [invalidOutputDir, validOutputDir];
     let requestCount = 0;
-    const answers = new Map([
-      ["Symbol: ", "NASDAQ:AAPL"],
-      ["Bar type (second/minute/hour/day/week/month): ", "minute"],
-      ["From (YYYY-MM or YYYY-MM-DD): ", "2024-01"],
-      ["To (YYYY-MM or YYYY-MM-DD): ", "2024-01"],
-    ]);
 
     try {
       await writeFile(invalidOutputDir, "not a directory", "utf8");
@@ -1003,8 +1305,12 @@ describe("runCli", () => {
         exit,
         isInteractive: true,
         prompt: async (question) => {
-          if (question === "Output directory: ") return outputDirAnswers.shift() ?? "";
-          return answers.get(question) ?? "";
+          if (question.startsWith("Symbol")) return "NASDAQ:AAPL";
+          if (question.startsWith("Bar type")) return "minute";
+          if (question.startsWith("From")) return "2024-01";
+          if (question.startsWith("To")) return "2024-01";
+          if (question.startsWith("Output directory")) return outputDirAnswers.shift() ?? "";
+          return "";
         },
         request: async () => {
           requestCount += 1;
@@ -1080,6 +1386,7 @@ describe("runCli", () => {
       assert.ok(!questions.some((question) => question.includes("Dadj")));
       assert.ok(!questions.some((question) => question.includes("Badj")));
       assert.ok(!questions.some((question) => question.includes("Settlement")));
+      assert.ok(!questions.some((question) => question.includes("Contract lookback months")));
       assert.ok(questions.some((question) => question.includes("Default: false")));
     } finally {
       await rm(outputDir, { recursive: true, force: true });
@@ -1115,6 +1422,7 @@ describe("runCli", () => {
           isInteractive: true,
           prompt: async (question) => {
             questions.push(question);
+            if (question.includes("Contract lookback months")) return "3";
             if (question.includes("Badj")) return "true";
             if (question.includes("Settlement")) return "true";
             return "";
@@ -1142,6 +1450,7 @@ describe("runCli", () => {
       assert.ok(!questions.some((question) => question.includes("Extended")));
       assert.ok(!questions.some((question) => question.includes("Split")));
       assert.ok(!questions.some((question) => question.includes("Dadj")));
+      assert.ok(questions.some((question) => question.includes("Contract lookback months")));
       assert.ok(questions.some((question) => question.includes("Badj")));
       assert.ok(questions.some((question) => question.includes("Settlement")));
     } finally {
@@ -1179,12 +1488,6 @@ describe("runCli", () => {
   it("reprompts when an interactive download_history argument is invalid", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
     const barTypes = ["daily", "minute"];
-    const answers = new Map([
-      ["Symbol: ", "NASDAQ:AAPL"],
-      ["From (YYYY-MM or YYYY-MM-DD): ", "2024-01"],
-      ["To (YYYY-MM or YYYY-MM-DD): ", "2024-01"],
-      ["Output directory: ", outputDir],
-    ]);
 
     try {
       await runCli(["download_history"], {
@@ -1192,10 +1495,12 @@ describe("runCli", () => {
         exit,
         isInteractive: true,
         prompt: async (question) => {
-          if (question === "Bar type (second/minute/hour/day/week/month): ") {
-            return barTypes.shift() ?? "";
-          }
-          return answers.get(question) ?? "";
+          if (question.startsWith("Symbol")) return "NASDAQ:AAPL";
+          if (question.startsWith("Bar type")) return barTypes.shift() ?? "";
+          if (question.startsWith("From")) return "2024-01";
+          if (question.startsWith("To")) return "2024-01";
+          if (question.startsWith("Output directory")) return outputDir;
+          return "";
         },
         request: async () => ({
           code: "NASDAQ:AAPL",

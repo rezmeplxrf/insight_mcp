@@ -13,7 +13,7 @@ import {
 } from "./history.js";
 import { validateHistoryIntervalArgs } from "./history-validation.js";
 import { type ResponseStoreFormat, validateResponseStorageTarget } from "./response-storage.js";
-import { shouldPromptSymbolScopedParam } from "./symbol-param-applicability.js";
+import { analyzeSymbolCodes, shouldPromptSymbolScopedParam } from "./symbol-param-applicability.js";
 import { validateSymbolLikeArg } from "./symbol-validation.js";
 import { type ToolDefinition, toolDefinitions } from "./tool-definitions.js";
 import { runApiTool } from "./tool-runner.js";
@@ -125,26 +125,26 @@ export function buildDownloadHistoryHelp(): string {
   return [
     `insight ${DOWNLOAD_HISTORY_COMMAND}`,
     "",
-    "Download historical data for a date range and save files locally. second/minute/hour use /history. day/week/month use /series. Continuous futures ending in 1! or 2! are expanded through the contracts endpoint into specific contract codes for second/minute/hour.",
+    "Download historical bars to local JSON or CSV files. Intraday bars use /history; day/week/month use /series. Continuous futures ending in 1! or 2! expand to contract codes for intraday bars.",
     "",
     "Parameters:",
     "  --symbol                   string   Required. Symbol code, e.g. NASDAQ:AAPL or CME_MINI:NQ1!",
-    "  --bar_type                 enum(second|minute|hour|day|week|month) Required. second uses daily /history requests; minute/hour use monthly /history requests; day/week/month use /series.",
+    "  --bar_type                 enum(second|minute|hour|day|week|month) Required. Request granularity.",
     "  --from                     string   Required. Start date, YYYY-MM or YYYY-MM-DD.",
     "  --to                       string   Required. End date, YYYY-MM or YYYY-MM-DD.",
     "  --output_dir               string   Required. Directory where files will be written.",
-    "  --format                   enum(json|csv|both) [optional] Default: csv.",
+    "  --format                   enum(json|csv|both) [optional] Output format. Default: csv.",
     "  --merge                    boolean [optional] Write one merged CSV when format is csv or both. Default: true.",
-    "  --keep_chunks              boolean [optional] Keep per-request CSV chunk files after merge. Default: false.",
-    "  --concurrency              number [optional] Concurrent history requests, 1-10. Default: 5.",
+    "  --keep_chunks              boolean [optional] Keep CSV chunk files after merge. Default: false.",
+    "  --concurrency              number [optional] Concurrent requests, 1-10. Default: 5.",
     "  --bar_interval             number [optional] Bar interval, 1-1440. Default: 1.",
-    "  --contract_lookback_months number [optional] Futures contract months ending at settlement. Default: 6.",
+    "  --contract_lookback_months number [optional] Prior futures contract months to include. Default: 6.",
     "  --overwrite                boolean [optional] Replace existing output files. Default: false.",
-    "  --extended                 boolean [optional] Pass through to the request.",
-    "  --dadj                     boolean [optional] Pass through to the request.",
-    "  --badj                     boolean [optional] Pass through to the request.",
-    "  --split                    boolean [optional] Pass through to the request. Default: true.",
-    "  --settlement               boolean [optional] Pass through to the request.",
+    "  --extended                 boolean [optional] Include extended hours. Default: true.",
+    "  --dadj                     boolean [optional] Apply dividend adjustment. Default: false.",
+    "  --badj                     boolean [optional] Back-adjust continuous futures. Default: true.",
+    "  --split                    boolean [optional] Apply split adjustment. Default: true.",
+    "  --settlement               boolean [optional] Use settlement as daily close. Default: false.",
     "",
     "Examples:",
     '  insight download_history --symbol "NASDAQ:AAPL" --bar_type minute --from 2024-01 --to 2024-06 --output_dir ./history --format csv --merge',
@@ -251,17 +251,17 @@ export function buildToolHelp(tool: ToolDefinition): string {
 
   for (const [key, zodType] of Object.entries(tool.schema)) {
     const optional = isOptionalZodType(zodType) ? " [optional]" : "";
-    const desc = getZodDescription(zodType);
+    const desc = formatHelpDescription(zodType);
     const typeName = formatTypeName(zodType);
     lines.push(`  --${key.padEnd(24)} ${typeName}${optional}  ${desc}`);
   }
 
   // filter is always available
   lines.push(
-    `  --${"filter".padEnd(24)} string [optional]  JSONata expression to transform the response`,
+    `  --${"filter".padEnd(24)} string [optional]  JSONata expression applied to the response.`,
   );
   lines.push(
-    `  --${"store".padEnd(24)} enum(none|json|csv) [optional]  Store the response instead of printing it. Default is none. csv is only for get_symbol_series.`,
+    `  --${"store".padEnd(24)} enum(none|json|csv) [optional]  Store the response locally. csv only supports get_symbol_series. Default: none.`,
   );
   lines.push(`  --${"output_file".padEnd(24)} string [optional]  File path for stored response.`);
   lines.push(
@@ -285,6 +285,13 @@ function getZodDescription(t: z.ZodTypeAny): string {
   const def = (t as any)._zod?.def ?? (t as any)._def ?? {};
   if (def.innerType) return getZodDescription(def.innerType);
   return "";
+}
+
+function formatHelpDescription(zodType: z.ZodTypeAny): string {
+  const hint = getPromptHint(zodType) ?? "";
+  const defaultValue = getPromptDefault(zodType);
+  if (defaultValue === null) return hint;
+  return hint ? `${hint} Default: ${defaultValue}.` : `Default: ${defaultValue}.`;
 }
 
 function formatTypeName(t: z.ZodTypeAny): string {
@@ -449,19 +456,38 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     return;
   }
 
-  const providedValidationError = validateResolvedToolArgs(args, tool);
-  if (providedValidationError) {
-    io.write(
-      `Invalid ${toolPromptLabel(providedValidationError.key)}: ${providedValidationError.error}\n`,
-    );
+  const inputArgs = { ...args };
+  const interactive = io.isInteractive === true && Boolean(io.prompt);
+  if (interactive) {
+    for (const error of collectInvalidProvidedToolArgs(inputArgs, tool)) {
+      io.write(`Invalid ${toolPromptLabel(error.key)}: ${error.error}\n`);
+      delete inputArgs[error.key];
+    }
+  } else {
+    const providedValidationError = validateResolvedToolArgs(inputArgs, tool, {
+      validateConditionalRequirements: false,
+    });
+    if (providedValidationError) {
+      io.write(
+        `Invalid ${toolPromptLabel(providedValidationError.key)}: ${providedValidationError.error}\n`,
+      );
+      io.exit(1);
+      return;
+    }
+  }
+
+  const storeModeError = validateStoreMode(tool.name, inputArgs.store);
+  if (storeModeError) {
+    io.write(`Invalid Store: ${storeModeError}\n`);
     io.exit(1);
     return;
   }
 
-  const resolvedArgs = await resolveToolArgs(args, tool, io);
+  const resolvedArgs = await resolveToolArgs(inputArgs, tool, io);
   if (!resolvedArgs) {
+    const missing = missingRequiredToolArgs(inputArgs, tool);
     io.write(
-      `Error: Missing required options for ${tool.name}: ${missingToolArgs(args, tool).join(", ")}\n\nRun: insight ${tool.name} --help`,
+      `Error: Missing required options for ${tool.name}: ${missing.join(", ")}\n\nRun: insight ${tool.name} --help`,
     );
     io.exit(1);
     return;
@@ -523,6 +549,10 @@ function missingToolArgs(args: Record<string, string>, tool: ToolDefinition): st
     .filter((key) => !args[key]);
 }
 
+function missingRequiredToolArgs(args: Record<string, string>, tool: ToolDefinition): string[] {
+  return [...missingToolArgs(args, tool), ...missingConditionalToolArgs(tool.name, args)];
+}
+
 async function resolveToolArgs(
   args: Record<string, string>,
   tool: ToolDefinition,
@@ -534,7 +564,10 @@ async function resolveToolArgs(
       if (resolved[key] !== undefined) continue;
       if (isOptionalZodType(zodType) && !shouldPromptSymbolScopedParam(key, resolved)) continue;
       if (isOptionalZodType(zodType)) {
-        const answer = await promptForOptionalToolArg(key, zodType, io);
+        if (shouldSkipInteractiveToolArg(tool.name, key, resolved)) continue;
+        const answer = isInteractiveToolArgRequired(tool.name, key, resolved)
+          ? await promptForToolArg(key, zodType, io)
+          : await promptForOptionalToolArg(key, zodType, io);
         if (answer === null) return null;
         if (answer !== undefined) resolved[key] = answer;
       } else {
@@ -551,6 +584,42 @@ async function resolveToolArgs(
   if (missingToolArgs(resolved, tool).length > 0) return null;
 
   return resolved;
+}
+
+function shouldSkipInteractiveToolArg(
+  toolName: string,
+  key: string,
+  args: Record<string, string>,
+): boolean {
+  if (toolName === "screen_crypto" && key === "countries") return true;
+
+  if (toolName === "get_options_expiration") {
+    if (key === "expiration") return hasArgValue(args.from) || hasArgValue(args.to);
+    if (key === "from" || key === "to") return hasArgValue(args.expiration);
+  }
+
+  if (toolName === "get_options_strike") {
+    if (key === "strike") return hasArgValue(args.range);
+    if (key === "range") return hasArgValue(args.strike);
+  }
+
+  return false;
+}
+
+function isInteractiveToolArgRequired(
+  toolName: string,
+  key: string,
+  args: Record<string, string>,
+): boolean {
+  if (toolName === "get_options_expiration") {
+    return (key === "from" || key === "to") && !hasArgValue(args.expiration);
+  }
+
+  if (toolName === "get_options_strike") {
+    return key === "range" && !hasArgValue(args.strike);
+  }
+
+  return false;
 }
 
 async function resolveStorageDestination(
@@ -675,6 +744,11 @@ function shouldPromptDownloadHistoryParam(
   key: string,
   args: Record<string, string | undefined>,
 ): boolean {
+  if (key === "contract_lookback_months") {
+    const { hasSymbol, hasContinuous } = analyzeSymbolCodes(args.symbol ?? "");
+    return !hasSymbol || hasContinuous;
+  }
+
   if (key !== "merge" && key !== "keep_chunks") return true;
   const format = args.format ?? "csv";
   const writesCsv = format === "csv" || format === "both";
@@ -689,8 +763,9 @@ async function promptForToolArg(
   io: CliIO,
 ): Promise<string | null> {
   const label = toolPromptLabel(key);
+  const question = promptQuestion(label, zodType, "required");
   for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
-    const answer = (await io.prompt?.(`${label}: `))?.trim() ?? "";
+    const answer = (await io.prompt?.(question))?.trim() ?? "";
     const error = validateToolArgAnswer(key, zodType, answer);
     if (!error) return answer;
     io.write(`Invalid ${label}: ${error}\n`);
@@ -733,14 +808,78 @@ function validateToolArgAnswer(key: string, zodType: z.ZodTypeAny, answer: strin
 function validateResolvedToolArgs(
   args: Record<string, string>,
   tool: ToolDefinition,
+  options: { validateConditionalRequirements?: boolean } = {},
 ): { key: string; error: string } | null {
   for (const [key, zodType] of Object.entries(tool.schema)) {
     if (args[key] === undefined) continue;
     const error = validateToolArgAnswer(key, zodType, args[key]);
     if (error) return { key, error };
   }
+  if (options.validateConditionalRequirements !== false) {
+    const conditionalError = validateConditionalToolArgs(tool.name, args);
+    if (conditionalError) return conditionalError;
+  }
   const historyIntervalError = validateHistoryIntervalArgs(tool.name, args);
   if (historyIntervalError) return historyIntervalError;
+  return null;
+}
+
+function collectInvalidProvidedToolArgs(
+  args: Record<string, string>,
+  tool: ToolDefinition,
+): Array<{ key: string; error: string }> {
+  const errors: Array<{ key: string; error: string }> = [];
+  for (const [key, zodType] of Object.entries(tool.schema)) {
+    if (args[key] === undefined) continue;
+    const error = validateToolArgAnswer(key, zodType, args[key]);
+    if (error) errors.push({ key, error });
+  }
+
+  if (!errors.some((error) => error.key === "bar_interval")) {
+    const historyIntervalError = validateHistoryIntervalArgs(tool.name, args);
+    if (historyIntervalError) errors.push(historyIntervalError);
+  }
+
+  return errors;
+}
+
+function validateConditionalToolArgs(
+  toolName: string,
+  args: Record<string, string>,
+): { key: string; error: string } | null {
+  const missing = missingConditionalToolArgs(toolName, args);
+  if (missing.length === 0) return null;
+  const key = toolName === "get_options_strike" ? "strike" : "expiration";
+  return { key, error: `provide ${missing.join(", ")}` };
+}
+
+function missingConditionalToolArgs(toolName: string, args: Record<string, string>): string[] {
+  if (toolName === "get_options_expiration") {
+    const hasExpiration = hasArgValue(args.expiration);
+    if (hasExpiration) return [];
+    const missing = [];
+    if (!hasArgValue(args.from)) missing.push("from");
+    if (!hasArgValue(args.to)) missing.push("to");
+    return missing.length === 2 ? ["expiration or from/to"] : missing;
+  }
+
+  if (toolName === "get_options_strike" && !hasArgValue(args.strike) && !hasArgValue(args.range)) {
+    return ["strike or range"];
+  }
+
+  return [];
+}
+
+function hasArgValue(value: string | undefined): boolean {
+  return value !== undefined && value.trim().length > 0;
+}
+
+function validateStoreMode(toolName: string, store: string | undefined): string | null {
+  if (store === undefined) return null;
+  if (!["none", "json", "csv"].includes(store)) return "store must be none, json, or csv";
+  if (store === "csv" && toolName !== "get_symbol_series") {
+    return "csv storage is only supported for get_symbol_series";
+  }
   return null;
 }
 
@@ -749,8 +888,9 @@ async function promptForDownloadHistoryArg(
   io: CliIO,
 ): Promise<string | null> {
   const label = downloadHistoryPromptLabel(key);
+  const question = promptQuestion(label, downloadHistorySchema[key], "required");
   for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
-    const answer = (await io.prompt?.(`${label}: `))?.trim() ?? "";
+    const answer = (await io.prompt?.(question))?.trim() ?? "";
     const error = validateDownloadHistoryArgAnswer(key, answer);
     if (error) {
       io.write(`Invalid ${label}: ${error}\n`);
@@ -829,11 +969,11 @@ function downloadHistoryPromptLabel(key: string): string {
     case "symbol":
       return "Symbol";
     case "bar_type":
-      return "Bar type (second/minute/hour/day/week/month)";
+      return "Bar type";
     case "from":
-      return "From (YYYY-MM or YYYY-MM-DD)";
+      return "From";
     case "to":
-      return "To (YYYY-MM or YYYY-MM-DD)";
+      return "To";
     case "output_dir":
       return "Output directory";
     case "format":
@@ -884,15 +1024,30 @@ function parseDownloadHistoryArgs(args: Record<string, string>): DownloadHistory
 }
 
 function optionalPromptQuestion(label: string, zodType: z.ZodTypeAny): string {
-  const parts = ["optional"];
+  return promptQuestion(label, zodType, "optional");
+}
+
+function promptQuestion(
+  label: string,
+  zodType: z.ZodTypeAny,
+  requirement: "required" | "optional",
+): string {
+  const parts: string[] = [requirement];
   const enumValues = getZodEnumValues(zodType);
   if (enumValues.length > 0) parts.push(`choices: ${enumValues.join("/")}`);
+  if (enumValues.length === 0) {
+    const typeName = formatTypeName(zodType);
+    if (typeName && typeName !== "string") parts.push(`type: ${typeName}`);
+  }
 
   const defaultValue = getPromptDefault(zodType);
   if (defaultValue !== null) parts.push(`Default: ${defaultValue}`);
-  parts.push("press Enter to skip");
 
-  return `${label} (${parts.join(", ")}): `;
+  const hint = getPromptHint(zodType);
+  if (requirement !== "required") parts.push("press Enter to skip");
+
+  const description = hint ? `${label}: ${hint}\n` : "";
+  return `${description}${label} (${parts.join(", ")}): `;
 }
 
 function getPromptDefault(zodType: z.ZodTypeAny): string | null {
@@ -919,6 +1074,20 @@ function extractDefaultFromDescription(description: string): string | null {
   const match = description.match(/Default(?:\s+is|\s+to|:)\s+['"`]?([^.'"`]+)['"`]?/i);
   if (!match) return null;
   return match[1].trim().replace(/^["']|["']$/g, "");
+}
+
+function getPromptHint(zodType: z.ZodTypeAny): string | null {
+  const description = getZodDescription(zodType);
+  if (!description) return null;
+
+  const hint = description
+    .replace(/^\((?:Optional|Required)(?:\s+if[^)]*)?\)\s*/i, "")
+    .replace(/\s*Default(?:\s+is|\s+to|:)\s+['"`]?[^.]+['"`]?\.?/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!hint) return null;
+  return hint.length > 120 ? `${hint.slice(0, 117).trimEnd()}...` : hint;
 }
 
 export function main() {
