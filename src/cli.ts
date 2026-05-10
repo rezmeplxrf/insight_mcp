@@ -12,6 +12,15 @@ import { runApiTool } from "./tool-runner.js";
 export { coerceArgs } from "./arg-coercion.js";
 
 const DOWNLOAD_HISTORY_COMMAND = "download_history";
+const MAX_INTERACTIVE_PROMPT_ATTEMPTS = 3;
+const DOWNLOAD_HISTORY_BAR_TYPES: readonly string[] = [
+  "second",
+  "minute",
+  "hour",
+  "day",
+  "week",
+  "month",
+];
 
 interface ParsedArgs {
   toolName: string | null;
@@ -469,8 +478,9 @@ async function resolveToolArgs(
     if (io.isInteractive !== true || !io.prompt) return null;
 
     for (const key of missing) {
-      const answer = (await io.prompt(`${toolPromptLabel(key)}: `)).trim();
-      if (answer) resolved[key] = answer;
+      const answer = await promptForToolArg(key, tool.schema[key], io);
+      if (!answer) return null;
+      resolved[key] = answer;
     }
 
     if (missingToolArgs(resolved, tool).length > 0) return null;
@@ -516,11 +526,64 @@ async function resolveDownloadHistoryArgs(
 
   const resolved = { ...args };
   for (const key of missing) {
-    const answer = (await io.prompt(`${downloadHistoryPromptLabel(key)}: `)).trim();
-    if (answer) resolved[key] = answer;
+    const answer = await promptForDownloadHistoryArg(key, io);
+    if (!answer) return null;
+    resolved[key] = answer;
   }
 
   return missingDownloadHistoryArgs(resolved).length === 0 ? resolved : null;
+}
+
+async function promptForToolArg(
+  key: string,
+  zodType: z.ZodTypeAny,
+  io: CliIO,
+): Promise<string | null> {
+  const label = toolPromptLabel(key);
+  for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
+    const answer = (await io.prompt?.(`${label}: `))?.trim() ?? "";
+    const error = validateToolArgAnswer(key, zodType, answer);
+    if (!error) return answer;
+    io.write(`Invalid ${label}: ${error}\n`);
+  }
+  return null;
+}
+
+function validateToolArgAnswer(key: string, zodType: z.ZodTypeAny, answer: string): string | null {
+  if (!answer) return "value is required";
+
+  const coerced = coerceArgs({ [key]: answer }, { [key]: zodType })[key];
+  const parsed = zodType.safeParse(coerced);
+  if (parsed.success) return null;
+
+  const enumValues = getZodEnumValues(zodType);
+  if (enumValues.length > 0) return `expected one of: ${enumValues.join(", ")}`;
+  return parsed.error.issues.map((issue) => issue.message).join("; ");
+}
+
+async function promptForDownloadHistoryArg(
+  key: RequiredDownloadHistoryArg,
+  io: CliIO,
+): Promise<string | null> {
+  const label = downloadHistoryPromptLabel(key);
+  for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
+    const answer = (await io.prompt?.(`${label}: `))?.trim() ?? "";
+    const error = validateDownloadHistoryArgAnswer(key, answer);
+    if (!error) return answer;
+    io.write(`Invalid ${label}: ${error}\n`);
+  }
+  return null;
+}
+
+function validateDownloadHistoryArgAnswer(
+  key: RequiredDownloadHistoryArg,
+  answer: string,
+): string | null {
+  if (!answer) return "value is required";
+  if (key === "bar_type" && !DOWNLOAD_HISTORY_BAR_TYPES.includes(answer)) {
+    return `expected one of: ${DOWNLOAD_HISTORY_BAR_TYPES.join(", ")}`;
+  }
+  return null;
 }
 
 function downloadHistoryPromptLabel(key: RequiredDownloadHistoryArg): string {
@@ -530,9 +593,9 @@ function downloadHistoryPromptLabel(key: RequiredDownloadHistoryArg): string {
     case "bar_type":
       return "Bar type (second/minute/hour/day/week/month)";
     case "from":
-      return "From";
+      return "From (YYYY-MM or YYYY-MM-DD)";
     case "to":
-      return "To";
+      return "To (YYYY-MM or YYYY-MM-DD)";
     case "output_dir":
       return "Output directory";
   }

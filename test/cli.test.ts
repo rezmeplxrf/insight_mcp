@@ -323,6 +323,30 @@ describe("runCli", () => {
     assert.equal(exitCode, undefined);
   });
 
+  it("reprompts when an interactive tool argument is invalid", async () => {
+    const answers = ["daily", "minute"];
+    const mockRequest = async (
+      _method: string,
+      _pathTemplate: string,
+      params: Record<string, any>,
+    ) => ({
+      bar_type: params.bar_type,
+    });
+
+    await runCli(["get_symbol_history", "--symbol", "NASDAQ:AAPL", "--start_date", "2024-01"], {
+      write,
+      exit,
+      request: mockRequest,
+      isInteractive: true,
+      prompt: async () => answers.shift() ?? "",
+    });
+
+    assert.ok(output.includes("Invalid Bar Type"));
+    assert.ok(output.includes("second, minute, hour"));
+    assert.ok(output.includes('"bar_type": "minute"'));
+    assert.equal(exitCode, undefined);
+  });
+
   it("fails on missing required tool arguments when non-interactive", async () => {
     await runCli(["get_symbol_info"], {
       write,
@@ -603,8 +627,8 @@ describe("runCli", () => {
     const answers = new Map([
       ["Symbol: ", "NASDAQ:AAPL"],
       ["Bar type (second/minute/hour/day/week/month): ", "minute"],
-      ["From: ", "2024-01"],
-      ["To: ", "2024-01"],
+      ["From (YYYY-MM or YYYY-MM-DD): ", "2024-01"],
+      ["To (YYYY-MM or YYYY-MM-DD): ", "2024-01"],
       ["Output directory: ", outputDir],
     ]);
 
@@ -625,6 +649,43 @@ describe("runCli", () => {
       assert.equal(parsed.total, 1);
       assert.equal(parsed.failed, 0);
       assert.ok(parsed.merged_file.endsWith("merged.csv"));
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reprompts when an interactive download_history argument is invalid", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
+    const barTypes = ["daily", "minute"];
+    const answers = new Map([
+      ["Symbol: ", "NASDAQ:AAPL"],
+      ["From (YYYY-MM or YYYY-MM-DD): ", "2024-01"],
+      ["To (YYYY-MM or YYYY-MM-DD): ", "2024-01"],
+      ["Output directory: ", outputDir],
+    ]);
+
+    try {
+      await runCli(["download_history"], {
+        write,
+        exit,
+        isInteractive: true,
+        prompt: async (question) => {
+          if (question === "Bar type (second/minute/hour/day/week/month): ") {
+            return barTypes.shift() ?? "";
+          }
+          return answers.get(question) ?? "";
+        },
+        request: async () => ({
+          code: "NASDAQ:AAPL",
+          bar_type: "1m",
+          series: [{ time: 1, close: 10 }],
+        }),
+      });
+
+      assert.ok(output.includes("Invalid Bar type"));
+      assert.ok(output.includes("second, minute, hour, day, week, month"));
+      const parsed = JSON.parse(output.slice(output.indexOf("{")));
+      assert.equal(parsed.failed, 0);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
