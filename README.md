@@ -53,6 +53,7 @@ Use `npx` in your MCP config:
 ```
 
 The MCP server also falls back to the key saved by `insight login` when `INSIGHTSENTRY_API_KEY` is not set.
+Set `INSIGHTSENTRY_CONFIG_DIR` to force the CLI and MCP server to read the same saved-login directory when they run with different home directories.
 
 ## CLI Usage
 
@@ -126,4 +127,3 @@ Fundamentals, options, screeners, calendars, documents:
 | `get_dividends`, `get_earnings`, `get_ipos`, `get_events` | Calendars |
 | `get_newsfeed` | Financial news |
 | `get_documents`, `get_document` | Filings and transcripts |
-

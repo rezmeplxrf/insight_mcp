@@ -2,9 +2,17 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { buildHelp, buildToolHelp, coerceArgs, parseArgs, runCli } from "../src/cli.js";
+import { loadConfig } from "../src/config.js";
 import { type ToolDefinition, toolDefinitions } from "../src/tool-definitions.js";
+
+function jwt(payload: Record<string, unknown>): string {
+  const encode = (value: unknown) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url").replace(/=+$/g, "");
+
+  return `${encode({ alg: "HS256" })}.${encode(payload)}.signature`;
+}
 
 function findTool(name: string): ToolDefinition {
   const tool = toolDefinitions.find((candidate) => candidate.name === name);
@@ -172,6 +180,8 @@ describe("buildToolHelp", () => {
 describe("runCli", () => {
   let output: string;
   let exitCode: number | undefined;
+  let tempConfigDir: string | null = null;
+  const originalConfigDir = process.env.INSIGHTSENTRY_CONFIG_DIR;
   const write = (s: string) => {
     output += s;
   };
@@ -179,9 +189,23 @@ describe("runCli", () => {
     exitCode = code;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     output = "";
     exitCode = undefined;
+    tempConfigDir = await mkdtemp(path.join(tmpdir(), "insight-cli-config-"));
+    process.env.INSIGHTSENTRY_CONFIG_DIR = tempConfigDir;
+  });
+
+  afterEach(async () => {
+    if (originalConfigDir === undefined) {
+      delete process.env.INSIGHTSENTRY_CONFIG_DIR;
+    } else {
+      process.env.INSIGHTSENTRY_CONFIG_DIR = originalConfigDir;
+    }
+    if (tempConfigDir) {
+      await rm(tempConfigDir, { recursive: true, force: true });
+      tempConfigDir = null;
+    }
   });
 
   it("shows help with no args", async () => {
@@ -228,13 +252,32 @@ describe("runCli", () => {
   });
 
   it("login with key saves config", async () => {
-    await runCli(["login", "--key", "test-jwt-key"], { write, exit });
+    await runCli(["login", "--key", jwt({ uuid: "user@example.com", plan: "enterprise" })], {
+      write,
+      exit,
+    });
     assert.ok(output.includes("API key saved"));
     assert.equal(exitCode, 0);
   });
 
+  it("login rejects a non-JWT key", async () => {
+    await runCli(["login", "--key", "not-a-jwt"], { write, exit });
+
+    assert.ok(output.includes("API key is not a valid InsightSentry JWT"));
+    assert.deepEqual(loadConfig(), {});
+    assert.equal(exitCode, 1);
+  });
+
+  it("login rejects a JWT missing uuid or plan", async () => {
+    await runCli(["login", "--key", jwt({ uuid: "user@example.com" })], { write, exit });
+
+    assert.ok(output.includes("API key JWT must include uuid and plan"));
+    assert.deepEqual(loadConfig(), {});
+    assert.equal(exitCode, 1);
+  });
+
   it("login prompts for key when interactive", async () => {
-    const answers = new Map([["API key: ", "interactive-jwt-key"]]);
+    const answers = new Map([["API key: ", jwt({ uuid: "user@example.com", plan: "mega" })]]);
 
     await runCli(["login"], {
       write,
@@ -244,6 +287,22 @@ describe("runCli", () => {
     });
 
     assert.ok(output.includes("API key saved"));
+    assert.equal(exitCode, 0);
+  });
+
+  it("interactive login reprompts after an invalid prompted key", async () => {
+    const answers = [jwt({ plan: "enterprise" }), jwt({ uuid: "user@example.com", plan: "ultra" })];
+
+    await runCli(["login"], {
+      write,
+      exit,
+      isInteractive: true,
+      prompt: async () => answers.shift() ?? "",
+    });
+
+    assert.ok(output.includes("API key JWT must include uuid and plan"));
+    assert.ok(output.includes("API key saved"));
+    assert.equal(loadConfig().apiKey, jwt({ uuid: "user@example.com", plan: "ultra" }));
     assert.equal(exitCode, 0);
   });
 

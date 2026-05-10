@@ -9,6 +9,9 @@ interface Config {
 type ApiKeySource = "environment" | "config" | "none";
 
 function getConfigDir(): string {
+  const override = process.env.INSIGHTSENTRY_CONFIG_DIR?.trim();
+  if (override) return override;
+
   const p = platform();
   if (p === "win32") {
     return join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "insightsentry");

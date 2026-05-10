@@ -43,6 +43,25 @@ describe("auth status", () => {
     assert.equal(status.expired, false);
   });
 
+  it("treats non-expiring InsightSentry JWTs as authenticated", () => {
+    const status = getAuthStatusForKey(
+      jwt({
+        uuid: "support@insightsentry.com",
+        plan: "enterprise",
+        newsfeed_enabled: true,
+        websocket_symbols: 200,
+        websocket_connections: 50,
+      }),
+      "config",
+      "/tmp/insightsentry/config.json",
+    );
+
+    assert.equal(status.authenticated, true);
+    assert.equal(status.subject, "support@insightsentry.com");
+    assert.equal(status.expires_at, undefined);
+    assert.equal(status.expired, undefined);
+  });
+
   it("returns the uuid for whoami", () => {
     const result = getWhoamiForKey(
       jwt({ uuid: "support@insightsentry.com", plan: "enterprise" }),

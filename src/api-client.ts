@@ -1,4 +1,5 @@
 const BASE_URL = "https://api.insightsentry.com";
+const HISTORY_PLAN_NAMES = new Set(["ultra", "mega", "enterprise"]);
 
 // Symbol code must be EXCHANGE:SYMBOL format (e.g., NASDAQ:AAPL)
 const SYMBOL_CODE_PATTERN = /^[A-Z0-9_./-]+:[A-Z0-9_./!-]+$/;
@@ -24,6 +25,34 @@ function validateSymbolParams(params: Record<string, any>): string | null {
   return null;
 }
 
+function isHistoryEndpoint(pathTemplate: string): boolean {
+  return /\/history(?:[/?#]|$)/.test(pathTemplate);
+}
+
+function decodeJwtPayload(token: string): Record<string, any> | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function validateHistoryPlan(apiKey: string, pathTemplate: string): void {
+  if (!isHistoryEndpoint(pathTemplate)) return;
+
+  const payload = decodeJwtPayload(apiKey);
+  const plan = typeof payload?.plan === "string" ? payload.plan.trim().toLowerCase() : "";
+  if (HISTORY_PLAN_NAMES.has(plan)) return;
+
+  throw new Error(
+    "The /history endpoint requires an Ultra, Mega, or Enterprise plan. Use get_symbol_series for recent data or upgrade your InsightSentry plan for deep historical access.",
+  );
+}
+
 export class ApiClient {
   private apiKey: string;
 
@@ -37,6 +66,7 @@ export class ApiClient {
     if (symbolError) {
       throw new Error(symbolError);
     }
+    validateHistoryPlan(this.apiKey, pathTemplate);
 
     // Separate path params from query/body params
     const pathParamNames = [...pathTemplate.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);

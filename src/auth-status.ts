@@ -24,6 +24,7 @@ interface JwtPayload {
   uuid?: string;
   sub?: string;
   email?: string;
+  plan?: string;
   exp?: number;
 }
 
@@ -58,6 +59,26 @@ export function getWhoamiForKey(apiKey: string | undefined, _source: AuthKeySour
   }
 
   return { ok: true, identity };
+}
+
+export function validateApiKeyForLogin(apiKey: string): WhoamiResult {
+  const token = apiKey.trim();
+  const payload = decodeJwtPayload(token);
+  if (!payload) {
+    return {
+      ok: false,
+      error: "API key is not a valid InsightSentry JWT.",
+    };
+  }
+
+  if (!payload.uuid?.trim() || !payload.plan?.trim()) {
+    return {
+      ok: false,
+      error: "API key JWT must include uuid and plan fields.",
+    };
+  }
+
+  return { ok: true, identity: payload.uuid };
 }
 
 export function getAuthStatusForKey(

@@ -18,10 +18,17 @@
       "environmentVariables": [
         {
           "description": "InsightSentry API key from https://insightsentry.com/dashboard",
-          "isRequired": true,
+          "isRequired": false,
           "format": "string",
           "isSecret": true,
           "name": "INSIGHTSENTRY_API_KEY"
+        },
+        {
+          "description": "Optional directory for the saved insight login config. Use this when the CLI and MCP server run with different home directories.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "INSIGHTSENTRY_CONFIG_DIR"
         }
       ]
     }

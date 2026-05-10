@@ -3,7 +3,7 @@ import { createInterface } from "node:readline/promises";
 import { z } from "zod";
 import { ApiClient } from "./api-client.js";
 import { coerceArgs, getZodEnumValues, getZodTypeName, isOptionalZodType } from "./arg-coercion.js";
-import { type AuthStatus, getAuthStatus } from "./auth-status.js";
+import { type AuthStatus, getAuthStatus, validateApiKeyForLogin } from "./auth-status.js";
 import { deleteConfig, getConfigLocation, resolveApiKey, saveConfig } from "./config.js";
 import { downloadHistorySchema } from "./download-history-schema.js";
 import {
@@ -334,6 +334,12 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
       io.exit(1);
       return;
     }
+    const validation = validateApiKeyForLogin(key);
+    if (!validation.ok) {
+      io.write(`Error: ${validation.error}`);
+      io.exit(1);
+      return;
+    }
     saveConfig({ apiKey: key });
     io.write(`API key saved to ${getConfigLocation()}`);
     io.exit(0);
@@ -489,8 +495,17 @@ async function resolveLoginKey(args: Record<string, string>, io: CliIO): Promise
   if (args.key?.trim()) return args.key.trim();
   if (io.isInteractive !== true || !io.prompt) return null;
 
-  const answer = (await io.prompt("API key: ")).trim();
-  return answer || null;
+  for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
+    const answer = (await io.prompt("API key: ")).trim();
+    if (!answer) return null;
+
+    const validation = validateApiKeyForLogin(answer);
+    if (validation.ok) return answer;
+
+    io.write(`Invalid API key: ${validation.error}\n`);
+  }
+
+  return null;
 }
 
 function resolveRequest(io: CliIO): RequestFn | null {
