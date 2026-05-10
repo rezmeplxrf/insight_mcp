@@ -377,6 +377,65 @@ describe("downloadHistory", () => {
     }
   });
 
+  it("uses the API response bar_type for output folders", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
+    const calls: Record<string, any>[] = [];
+
+    try {
+      const result = await downloadHistory(
+        {
+          symbol: "NASDAQ:AAPL",
+          from: "2024-01-01",
+          to: "2024-01-02",
+          bar_type: "month",
+          output_dir: outputDir,
+          format: "csv",
+          keep_chunks: true,
+        },
+        {
+          request: async (method, pathTemplate, params) => {
+            calls.push({ method, pathTemplate, params });
+            return {
+              code: "NASDAQ:AAPL",
+              bar_type: "1M",
+              series: [{ time: Date.UTC(2024, 0, 1) / 1000, close: 10 }],
+            };
+          },
+        },
+      );
+
+      assert.deepEqual(calls, [
+        {
+          method: "GET",
+          pathTemplate: "/v3/symbols/{symbol}/series",
+          params: {
+            symbol: "NASDAQ:AAPL",
+            bar_type: "month",
+            dp: 30000,
+          },
+        },
+      ]);
+      const responseNamedChunk = path.join(
+        outputDir,
+        "NASDAQ_AAPL",
+        "1M",
+        "2024-01-01_2024-01-02.csv",
+      );
+      assert.ok(result.files.includes(responseNamedChunk));
+      assert.equal(result.merged_file, path.join(outputDir, "NASDAQ_AAPL", "1M", "merged.csv"));
+      await assert.rejects(
+        () =>
+          readFile(
+            path.join(outputDir, "NASDAQ_AAPL", "1mo", "2024-01-01_2024-01-02.csv"),
+            "utf8",
+          ),
+        /ENOENT/,
+      );
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("downloads day data from /series and filters output rows by from/to", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
     const calls: Record<string, any>[] = [];

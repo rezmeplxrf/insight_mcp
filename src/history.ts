@@ -1,4 +1,4 @@
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export type HistoryBarType = "second" | "minute" | "hour" | "day" | "week" | "month";
@@ -107,7 +107,7 @@ export async function downloadHistory(
   const concurrency = normalizeConcurrency(options.concurrency);
   const shouldMergeCsv = options.merge ?? true;
   const plan = await planHistoryRequests(options, deps);
-  const mergeTargetFiles = new Set<string>();
+  const mergeCsvFilesByRequestIndex = new Map<number, string[]>();
   const createdCsvFiles = new Set<string>();
   const result: DownloadHistoryResult = {
     mode: plan.mode,
@@ -125,18 +125,22 @@ export async function downloadHistory(
 
   async function worker(): Promise<void> {
     while (nextIndex < plan.requests.length) {
-      const request = plan.requests[nextIndex];
+      const requestIndex = nextIndex;
+      const request = plan.requests[requestIndex];
       nextIndex += 1;
       const savedFiles: string[] = [];
       const startDate = String(request.params.start_date ?? `${options.from}_${options.to}`);
       const symbol = String(request.params.symbol);
 
       try {
-        const targetFiles = outputFilesForFormat(request.outputBasePath, format);
-        if (!options.overwrite && (await allFilesExist(targetFiles))) {
-          for (const filePath of targetFiles.filter((target) => target.endsWith(".csv"))) {
-            mergeTargetFiles.add(filePath);
-          }
+        const existingTargetFiles = !options.overwrite
+          ? await findExistingTargetFiles(request.outputBasePath, format)
+          : null;
+        if (existingTargetFiles) {
+          mergeCsvFilesByRequestIndex.set(
+            requestIndex,
+            existingTargetFiles.filter((target) => target.endsWith(".csv")),
+          );
           result.skipped += 1;
           result.completed += 1;
           deps.onProgress?.({
@@ -145,7 +149,7 @@ export async function downloadHistory(
             status: "skipped",
             symbol,
             start_date: startDate,
-            files: targetFiles,
+            files: existingTargetFiles,
           });
           continue;
         }
@@ -175,6 +179,26 @@ export async function downloadHistory(
           continue;
         }
 
+        const outputBasePath = outputBasePathForResponse(request, response);
+        const targetFiles = outputFilesForFormat(outputBasePath, format);
+        if (!options.overwrite && (await allFilesExist(targetFiles))) {
+          mergeCsvFilesByRequestIndex.set(
+            requestIndex,
+            targetFiles.filter((target) => target.endsWith(".csv")),
+          );
+          result.skipped += 1;
+          result.completed += 1;
+          deps.onProgress?.({
+            completed: result.completed,
+            total: result.total,
+            status: "skipped",
+            symbol,
+            start_date: startDate,
+            files: targetFiles,
+          });
+          continue;
+        }
+
         for (const filePath of targetFiles) {
           await mkdir(path.dirname(filePath), { recursive: true });
           if (filePath.endsWith(".csv")) {
@@ -185,7 +209,9 @@ export async function downloadHistory(
           savedFiles.push(filePath);
           result.files.push(filePath);
           if (filePath.endsWith(".csv")) {
-            mergeTargetFiles.add(filePath);
+            const csvFiles = mergeCsvFilesByRequestIndex.get(requestIndex) ?? [];
+            csvFiles.push(filePath);
+            mergeCsvFilesByRequestIndex.set(requestIndex, csvFiles);
             createdCsvFiles.add(filePath);
           }
         }
@@ -222,11 +248,11 @@ export async function downloadHistory(
   );
 
   if (shouldMergeCsv && (format === "csv" || format === "both")) {
-    const orderedCsvFiles = plan.requests
-      .flatMap((request) => outputFilesForFormat(request.outputBasePath, format))
-      .filter((filePath) => filePath.endsWith(".csv") && mergeTargetFiles.has(filePath));
+    const orderedCsvFiles = plan.requests.flatMap(
+      (_request, index) => mergeCsvFilesByRequestIndex.get(index) ?? [],
+    );
     if (orderedCsvFiles.length > 0) {
-      const mergedFile = mergedCsvPath(options);
+      const mergedFile = mergedCsvPath(options, path.basename(path.dirname(orderedCsvFiles[0])));
       await mergeCsvFiles(orderedCsvFiles, mergedFile);
       result.merged_file = mergedFile;
       result.files.push(mergedFile);
@@ -622,11 +648,23 @@ function outputFilesForFormat(outputBasePath: string, format: HistoryOutputForma
   return [`${outputBasePath}.${format}`];
 }
 
-function mergedCsvPath(options: DownloadHistoryOptions): string {
+function outputBasePathForResponse(request: PlannedHistoryRequest, response: any): string {
+  const responseBarType =
+    typeof response?.bar_type === "string" && response.bar_type.trim()
+      ? sanitizePathPart(response.bar_type.trim())
+      : path.basename(path.dirname(request.outputBasePath));
+  return path.join(
+    path.dirname(path.dirname(request.outputBasePath)),
+    responseBarType,
+    path.basename(request.outputBasePath),
+  );
+}
+
+function mergedCsvPath(options: DownloadHistoryOptions, barTypeLabel: string): string {
   return path.join(
     path.resolve(options.output_dir),
     sanitizePathPart(options.symbol),
-    timeframeLabel(options.bar_type, options.bar_interval),
+    sanitizePathPart(barTypeLabel),
     "merged.csv",
   );
 }
@@ -688,6 +726,29 @@ async function allFilesExist(files: string[]): Promise<boolean> {
     }
   }
   return true;
+}
+
+async function findExistingTargetFiles(
+  outputBasePath: string,
+  format: HistoryOutputFormat,
+): Promise<string[] | null> {
+  const outputRoot = path.dirname(path.dirname(outputBasePath));
+  const outputName = path.basename(outputBasePath);
+
+  let entries;
+  try {
+    entries = await readdir(outputRoot, { withFileTypes: true });
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const candidateFiles = outputFilesForFormat(path.join(outputRoot, entry.name, outputName), format);
+    if (await allFilesExist(candidateFiles)) return candidateFiles;
+  }
+  return null;
 }
 
 async function removeChunkFiles(files: string[]): Promise<void> {
