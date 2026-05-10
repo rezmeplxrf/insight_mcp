@@ -8,7 +8,7 @@ import { renderChart } from "./chart.js";
 import { resolveApiKeyWithSource } from "./config.js";
 import { downloadHistorySchema } from "./download-history-schema.js";
 import { downloadHistory } from "./history.js";
-import { docResources } from "./resources.js";
+import { docResources, fetchDocResourceContent } from "./resources.js";
 import { validateSymbolLikeArgs } from "./symbol-validation.js";
 import { toolDefinitions } from "./tool-definitions.js";
 import { runApiTool } from "./tool-runner.js";
@@ -77,12 +77,17 @@ Call \`whoami\` to check whether this MCP server has an InsightSentry API key co
 
 ### "Help the user build an app with our API"
 Read the documentation resources for endpoint details and examples:
-- \`insightsentry://docs/rest-api\` — Full REST API reference with all endpoints
-- \`insightsentry://docs/websocket\` — WebSocket connection, authentication, subscriptions, data formats, Python/JS examples
+- \`insightsentry://docs\` — Documentation index with all current guides
+- \`insightsentry://docs/parameters\` — Common parameters for prices, sessions, currencies, and bar types
+- \`insightsentry://docs/ws\` — WebSocket connection, authentication, subscriptions, data formats, Python/JS examples
+- \`insightsentry://docs/mcp\` — CLI and MCP setup
 - \`insightsentry://docs/screener\` — Screener field discovery and filtering patterns
 - \`insightsentry://docs/options\` — Option chains, Greeks, code format explained
-- \`insightsentry://docs/history\` — History endpoints: bar types, params, concurrency limits, history vs series
+- \`insightsentry://docs/organization\` — Organization member and subscription management
+- \`insightsentry://docs/archive\` — History endpoints: bar types, params, concurrency limits, history vs series
 - \`insightsentry://docs/futures-history\` — Futures contract month logic
+- \`insightsentry://docs/scalability\` — Scaling approaches and volume discounts
+- \`insightsentry://docs/enterprise\` — Enterprise data package options
 
 ## Key Concepts
 - **Symbol format**: Always \`EXCHANGE:SYMBOL\` (e.g., NASDAQ:AAPL, BINANCE:BTCUSDT, CME_MINI:NQ1!)
@@ -412,7 +417,13 @@ for (const doc of docResources) {
     doc.uri,
     { mimeType: doc.mimeType, description: doc.description },
     async () => ({
-      contents: [{ uri: doc.uri, mimeType: doc.mimeType, text: doc.content }],
+      contents: [
+        {
+          uri: doc.uri,
+          mimeType: doc.mimeType,
+          text: await fetchDocResourceContent(doc),
+        },
+      ],
     }),
   );
 }
