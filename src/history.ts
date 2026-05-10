@@ -153,7 +153,7 @@ export async function downloadHistory(
 
       try {
         const existingTargetFiles = !options.overwrite
-          ? await findExistingTargetFiles(request.outputBasePath, format)
+          ? await findExistingTargetFiles(request.outputBasePath, format, request)
           : null;
         if (existingTargetFiles) {
           mergeCsvFilesByRequestIndex.set(
@@ -200,7 +200,7 @@ export async function downloadHistory(
 
         const outputBasePath = outputBasePathForResponse(request, response);
         const targetFiles = outputFilesForFormat(outputBasePath, format);
-        if (!options.overwrite && (await allFilesAreResumable(targetFiles))) {
+        if (!options.overwrite && (await allFilesAreResumable(targetFiles, request))) {
           mergeCsvFilesByRequestIndex.set(
             requestIndex,
             targetFiles.filter((target) => target.endsWith(".csv")),
@@ -224,10 +224,10 @@ export async function downloadHistory(
           } else {
             await writeFileAtomic(filePath, `${JSON.stringify(response, null, 2)}\n`);
           }
+          await writeOutputMarker(filePath, request);
           savedFiles.push(filePath);
           result.files.push(filePath);
           if (filePath.endsWith(".csv")) {
-            await writeChunkMarker(filePath);
             const csvFiles = mergeCsvFilesByRequestIndex.get(requestIndex) ?? [];
             csvFiles.push(filePath);
             mergeCsvFilesByRequestIndex.set(requestIndex, csvFiles);
@@ -743,20 +743,27 @@ async function mergeCsvFiles(files: string[], outputPath: string): Promise<void>
   await writeFileAtomic(outputPath, content);
 }
 
-async function allFilesAreResumable(files: string[]): Promise<boolean> {
+async function allFilesAreResumable(
+  files: string[],
+  request: PlannedHistoryRequest,
+): Promise<boolean> {
   for (const file of files) {
-    if (!(await isExistingOutputFileResumable(file))) {
+    if (!(await isExistingOutputFileResumable(file, request))) {
       return false;
     }
   }
   return true;
 }
 
-async function isExistingOutputFileResumable(file: string): Promise<boolean> {
+async function isExistingOutputFileResumable(
+  file: string,
+  request: PlannedHistoryRequest,
+): Promise<boolean> {
   try {
+    if (!(await hasMatchingOutputMarker(file, request))) return false;
     const content = await readFile(file, "utf8");
     if (file.endsWith(".csv")) {
-      if (!content.trim()) return await hasChunkMarker(file);
+      if (!content.trim()) return true;
       validateCsvContent(content);
       return true;
     }
@@ -795,6 +802,7 @@ function validateJsonContent(content: string): void {
 async function findExistingTargetFiles(
   outputBasePath: string,
   format: HistoryOutputFormat,
+  request: PlannedHistoryRequest,
 ): Promise<string[] | null> {
   const outputRoot = path.dirname(path.dirname(outputBasePath));
   const outputName = path.basename(outputBasePath);
@@ -813,7 +821,7 @@ async function findExistingTargetFiles(
       path.join(outputRoot, entry.name, outputName),
       format,
     );
-    if (await allFilesAreResumable(candidateFiles)) return candidateFiles;
+    if (await allFilesAreResumable(candidateFiles, request)) return candidateFiles;
   }
   return null;
 }
@@ -879,14 +887,17 @@ async function writeFileAtomic(filePath: string, content: string): Promise<void>
   }
 }
 
-async function writeChunkMarker(filePath: string): Promise<void> {
-  await writeFileAtomic(chunkMarkerPath(filePath), "");
+async function writeOutputMarker(filePath: string, request: PlannedHistoryRequest): Promise<void> {
+  await writeFileAtomic(
+    chunkMarkerPath(filePath),
+    `${stableStringify(historyRequestSignature(request))}\n`,
+  );
 }
 
 async function writeMergedMarker(filePath: string, options: DownloadHistoryOptions): Promise<void> {
   await writeFileAtomic(
     mergedMarkerPath(filePath),
-    `${JSON.stringify(historyRunSignature(options), null, 2)}\n`,
+    `${stableStringify(historyRunSignature(options))}\n`,
   );
 }
 
@@ -900,13 +911,29 @@ async function hasChunkMarker(filePath: string): Promise<boolean> {
   }
 }
 
+async function hasMatchingOutputMarker(
+  filePath: string,
+  request: PlannedHistoryRequest,
+): Promise<boolean> {
+  try {
+    const content = await readFile(chunkMarkerPath(filePath), "utf8");
+    return (
+      stableStringify(JSON.parse(content)) === stableStringify(historyRequestSignature(request))
+    );
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return false;
+    if (error instanceof SyntaxError) return false;
+    throw error;
+  }
+}
+
 async function hasMatchingMergedMarker(
   filePath: string,
   options: DownloadHistoryOptions,
 ): Promise<boolean> {
   try {
     const content = await readFile(mergedMarkerPath(filePath), "utf8");
-    return JSON.stringify(JSON.parse(content)) === JSON.stringify(historyRunSignature(options));
+    return stableStringify(JSON.parse(content)) === stableStringify(historyRunSignature(options));
   } catch (error: any) {
     if (error?.code === "ENOENT") return false;
     if (error instanceof SyntaxError) return false;
@@ -936,6 +963,27 @@ function historyRunSignature(options: DownloadHistoryOptions): Record<string, un
     split: options.split ?? null,
     settlement: options.settlement ?? null,
   };
+}
+
+function historyRequestSignature(request: PlannedHistoryRequest): Record<string, unknown> {
+  return {
+    method: request.method,
+    params: request.params,
+  };
+}
+
+function stableStringify(value: unknown): string {
+  return JSON.stringify(sortForSignature(value));
+}
+
+function sortForSignature(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortForSignature);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => [key, sortForSignature(nested)]),
+  );
 }
 
 function serializeCsvRows(headers: string[], rows: any[][]): string {
