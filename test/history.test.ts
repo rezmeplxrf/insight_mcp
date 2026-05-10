@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -678,8 +678,9 @@ describe("downloadHistory", () => {
     }
   });
 
-  it("uses an existing valid merged CSV as a completed resumed run", async () => {
+  it("refetches after a completed merged CSV run instead of resuming from merged output", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
+    let requestCount = 0;
 
     try {
       const first = await downloadHistory(
@@ -710,15 +711,32 @@ describe("downloadHistory", () => {
           format: "csv",
         },
         {
-          request: async () => assert.fail("existing merged CSV should be reused without fetching"),
+          request: async () => {
+            requestCount += 1;
+            return {
+              code: "NASDAQ:AAPL",
+              bar_type: "1m",
+              series: [{ time: 1, close: 20 }],
+            };
+          },
         },
       );
 
+      assert.equal(requestCount, 1);
       assert.equal(result.completed, 1);
-      assert.equal(result.skipped, 1);
+      assert.equal(result.skipped, 0);
       assert.equal(result.failed, 0);
       assert.equal(result.merged_file, first.merged_file);
       assert.deepEqual(result.files, [first.merged_file]);
+      assert.equal(
+        await readFile(requireMergedFile(result), "utf8"),
+        "code,bar_type,time,close\nNASDAQ:AAPL,1m,1,20\n",
+      );
+      await assert.rejects(
+        () =>
+          readFile(path.join(outputDir, "NASDAQ_AAPL", "1m", ".merged.csv.insight-history-merged")),
+        /ENOENT/,
+      );
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
@@ -959,12 +977,11 @@ describe("downloadHistory", () => {
     }
   });
 
-  it("refetches when an existing merged marker no longer matches file content", async () => {
+  it("does not write merged resume markers for completed merge output", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
-    let requestCount = 0;
 
     try {
-      const first = await downloadHistory(
+      const result = await downloadHistory(
         {
           symbol: "NASDAQ:AAPL",
           from: "2024-01",
@@ -982,13 +999,34 @@ describe("downloadHistory", () => {
         },
       );
 
-      await writeFile(
-        requireMergedFile(first),
-        "code,bar_type,time,close\nNASDAQ:AAPL,1m,1,99\n",
-        "utf8",
+      await assert.rejects(
+        () =>
+          readFile(path.join(outputDir, "NASDAQ_AAPL", "1m", ".merged.csv.insight-history-merged")),
+        /ENOENT/,
       );
+      assert.equal(
+        await readFile(requireMergedFile(result), "utf8"),
+        "code,bar_type,time,close\nNASDAQ:AAPL,1m,1,10\n",
+      );
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
 
-      const result = await downloadHistory(
+  it("removes legacy merged markers after rewriting merged output", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
+    const markerPath = path.join(
+      outputDir,
+      "NASDAQ_AAPL",
+      "1m",
+      ".merged.csv.insight-history-merged",
+    );
+
+    try {
+      await mkdir(path.dirname(markerPath), { recursive: true });
+      await writeFile(markerPath, "legacy marker\n", "utf8");
+
+      await downloadHistory(
         {
           symbol: "NASDAQ:AAPL",
           from: "2024-01",
@@ -998,22 +1036,15 @@ describe("downloadHistory", () => {
           format: "csv",
         },
         {
-          request: async () => {
-            requestCount += 1;
-            return {
-              code: "NASDAQ:AAPL",
-              bar_type: "1m",
-              series: [{ time: 1, close: 10 }],
-            };
-          },
+          request: async () => ({
+            code: "NASDAQ:AAPL",
+            bar_type: "1m",
+            series: [{ time: 1, close: 10 }],
+          }),
         },
       );
 
-      assert.equal(requestCount, 1);
-      assert.equal(
-        await readFile(requireMergedFile(result), "utf8"),
-        "code,bar_type,time,close\nNASDAQ:AAPL,1m,1,10\n",
-      );
+      await assert.rejects(() => readFile(markerPath, "utf8"), /ENOENT/);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
@@ -1071,7 +1102,7 @@ describe("downloadHistory", () => {
     }
   });
 
-  it("cleans matching chunks and reports progress when resuming from merged CSV", async () => {
+  it("cleans matching chunks and reports progress when resuming unfinished merge work", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
     const chunkPath = path.join(outputDir, "NASDAQ_AAPL", "1m", "2024-01.csv");
     const markerPath = path.join(
@@ -1112,7 +1143,7 @@ describe("downloadHistory", () => {
           format: "csv",
         },
         {
-          request: async () => assert.fail("existing merged CSV should be reused without fetching"),
+          request: async () => assert.fail("marked chunk should be reused without fetching"),
           onProgress: (event) => progress.push(`${event.completed}/${event.total}:${event.status}`),
         },
       );
@@ -1122,6 +1153,46 @@ describe("downloadHistory", () => {
       assert.deepEqual(result.files, [first.merged_file]);
       await assert.rejects(() => readFile(chunkPath, "utf8"), /ENOENT/);
       await assert.rejects(() => readFile(markerPath, "utf8"), /ENOENT/);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes empty chunk directories after merging futures chunks", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
+    const chunkDir = path.join(outputDir, "CME_MINI_NQ", "CME_MINI_NQH2026", "1h");
+
+    try {
+      const result = await downloadHistory(
+        {
+          symbol: "CME_MINI:NQ1!",
+          from: "2026-01",
+          to: "2026-01",
+          bar_type: "hour",
+          output_dir: outputDir,
+          format: "csv",
+          contract_lookback_months: 3,
+        },
+        {
+          request: async (_method, pathTemplate, params) => {
+            if (pathTemplate === "/v3/symbols/{symbol}/contracts") {
+              return {
+                base_code: "CME_MINI:NQ",
+                contracts: [{ code: "NQH2026", settlement_date: "20260320" }],
+              };
+            }
+            return {
+              code: params.symbol,
+              bar_type: "1h",
+              series: [{ time: 1, close: 10 }],
+            };
+          },
+        },
+      );
+
+      assert.equal(result.merged_file, path.join(outputDir, "CME_MINI_NQ1!", "1h", "merged.csv"));
+      await assert.rejects(() => readdir(chunkDir), /ENOENT/);
+      await assert.rejects(() => readdir(path.dirname(chunkDir)), /ENOENT/);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
-import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { validateHistoryBarInterval } from "./history-validation.js";
 
@@ -87,7 +87,7 @@ const DEFAULT_CONCURRENCY = 5;
 const MAX_CONCURRENCY = 10;
 const DEFAULT_CONTRACT_LOOKBACK_MONTHS = 6;
 const CHUNK_MARKER_SUFFIX = "insight-history-chunk";
-const MERGED_MARKER_SUFFIX = "insight-history-merged";
+const LEGACY_MERGED_MARKER_SUFFIX = "insight-history-merged";
 const HISTORY_BAR_TYPES = ["second", "minute", "hour"] as const;
 const SERIES_BAR_TYPES = ["day", "week", "month"] as const;
 
@@ -127,33 +127,6 @@ export async function downloadHistory(
     files: [],
     errors: [],
   };
-
-  const existingMergedFile =
-    !options.overwrite && shouldMergeCsv && format === "csv"
-      ? await findExistingMergedCsv(options)
-      : null;
-  if (existingMergedFile) {
-    if (!options.keep_chunks) {
-      const removableCsvFiles = await findRemovableChunksForMergedResume(plan.requests);
-      await removeChunkFilesAndMarkers(removableCsvFiles);
-    }
-    result.completed = result.total;
-    result.skipped = result.total;
-    result.merged_file = existingMergedFile;
-    result.files.push(existingMergedFile);
-    for (let index = 0; index < plan.requests.length; index += 1) {
-      const request = plan.requests[index];
-      deps.onProgress?.({
-        completed: index + 1,
-        total: result.total,
-        status: "skipped",
-        symbol: String(request.params.symbol),
-        start_date: String(request.params.start_date ?? `${options.from}_${options.to}`),
-        files: [existingMergedFile],
-      });
-    }
-    return result;
-  }
 
   let nextIndex = 0;
 
@@ -290,14 +263,13 @@ export async function downloadHistory(
     );
     if (orderedCsvFiles.length > 0) {
       const mergedFile = mergedCsvPath(options, path.basename(path.dirname(orderedCsvFiles[0])));
-      await removeMergedMarker(mergedFile);
-      const mergedContent = await mergeCsvFiles(orderedCsvFiles, mergedFile);
-      await writeMergedMarker(mergedFile, options, mergedContent);
+      await mergeCsvFiles(orderedCsvFiles, mergedFile);
+      await removeLegacyMergedMarker(mergedFile);
       result.merged_file = mergedFile;
       result.files.push(mergedFile);
       if (!options.keep_chunks) {
         const removableCsvFiles = await filterRemovableChunkFiles(orderedCsvFiles, createdCsvFiles);
-        await removeChunkFilesAndMarkers(removableCsvFiles);
+        await removeChunkFilesAndMarkers(removableCsvFiles, options.output_dir);
         result.files = result.files.filter((filePath) => !removableCsvFiles.includes(filePath));
       }
     }
@@ -844,36 +816,6 @@ async function findExistingTargetFiles(
   return null;
 }
 
-async function findExistingMergedCsv(options: DownloadHistoryOptions): Promise<string | null> {
-  const candidate = mergedCsvPath(options, timeframeLabel(options.bar_type, options.bar_interval));
-  try {
-    const content = await readFile(candidate, "utf8");
-    if (content.trim()) validateCsvContent(content);
-    return (await hasMatchingMergedMarker(candidate, options, content)) ? candidate : null;
-  } catch {
-    return null;
-  }
-}
-
-async function findRemovableChunksForMergedResume(
-  requests: PlannedHistoryRequest[],
-): Promise<string[]> {
-  const removable = new Set<string>();
-  for (const request of requests) {
-    const existingTargetFiles = await findExistingTargetFiles(
-      request.outputBasePath,
-      "csv",
-      request,
-    );
-    for (const file of existingTargetFiles ?? []) {
-      if (file.endsWith(".csv") && (await hasChunkMarker(file))) {
-        removable.add(file);
-      }
-    }
-  }
-  return Array.from(removable);
-}
-
 async function filterRemovableChunkFiles(
   files: string[],
   createdCsvFiles: Set<string>,
@@ -887,7 +829,7 @@ async function filterRemovableChunkFiles(
   return removable;
 }
 
-async function removeChunkFilesAndMarkers(files: string[]): Promise<void> {
+async function removeChunkFilesAndMarkers(files: string[], outputDir: string): Promise<void> {
   await Promise.all(
     files.map(async (file) => {
       try {
@@ -902,14 +844,46 @@ async function removeChunkFilesAndMarkers(files: string[]): Promise<void> {
       }
     }),
   );
+  await removeEmptyParentDirectories(
+    Array.from(new Set(files.map((file) => path.dirname(file)))),
+    path.resolve(outputDir),
+  );
+}
+
+async function removeEmptyParentDirectories(
+  directories: string[],
+  outputDir: string,
+): Promise<void> {
+  const stopDir = path.resolve(outputDir);
+  const sortedDirectories = directories
+    .map((directory) => path.resolve(directory))
+    .sort((left, right) => right.length - left.length);
+
+  for (const directory of sortedDirectories) {
+    let current = directory;
+    while (current.startsWith(`${stopDir}${path.sep}`)) {
+      try {
+        await rmdir(current);
+      } catch (error: any) {
+        if (error?.code === "ENOENT") {
+          // Another chunk cleanup may already have removed this directory.
+        } else if (error?.code === "ENOTEMPTY" || error?.code === "EEXIST") {
+          break;
+        } else {
+          throw error;
+        }
+      }
+      current = path.dirname(current);
+    }
+  }
 }
 
 async function removeOutputMarker(filePath: string): Promise<void> {
   await unlinkIfExists(chunkMarkerPath(filePath));
 }
 
-async function removeMergedMarker(filePath: string): Promise<void> {
-  await unlinkIfExists(mergedMarkerPath(filePath));
+async function removeLegacyMergedMarker(filePath: string): Promise<void> {
+  await unlinkIfExists(legacyMergedMarkerPath(filePath));
 }
 
 async function unlinkIfExists(filePath: string): Promise<void> {
@@ -953,20 +927,6 @@ async function writeOutputMarker(
   );
 }
 
-async function writeMergedMarker(
-  filePath: string,
-  options: DownloadHistoryOptions,
-  content: string,
-): Promise<void> {
-  await writeFileAtomic(
-    mergedMarkerPath(filePath),
-    `${stableStringify({
-      sha256: contentHash(content),
-      signature: historyRunSignature(options),
-    })}\n`,
-  );
-}
-
 async function hasChunkMarker(filePath: string): Promise<boolean> {
   try {
     await readFile(chunkMarkerPath(filePath));
@@ -998,49 +958,15 @@ async function hasMatchingOutputMarker(
   }
 }
 
-async function hasMatchingMergedMarker(
-  filePath: string,
-  options: DownloadHistoryOptions,
-  content: string,
-): Promise<boolean> {
-  try {
-    const marker = await readFile(mergedMarkerPath(filePath), "utf8");
-    return (
-      stableStringify(JSON.parse(marker)) ===
-      stableStringify({
-        sha256: contentHash(content),
-        signature: historyRunSignature(options),
-      })
-    );
-  } catch (error: any) {
-    if (error?.code === "ENOENT") return false;
-    if (error instanceof SyntaxError) return false;
-    throw error;
-  }
-}
-
 function chunkMarkerPath(filePath: string): string {
   return path.join(path.dirname(filePath), `.${path.basename(filePath)}.${CHUNK_MARKER_SUFFIX}`);
 }
 
-function mergedMarkerPath(filePath: string): string {
-  return path.join(path.dirname(filePath), `.${path.basename(filePath)}.${MERGED_MARKER_SUFFIX}`);
-}
-
-function historyRunSignature(options: DownloadHistoryOptions): Record<string, unknown> {
-  return {
-    symbol: options.symbol,
-    from: options.from,
-    to: options.to,
-    bar_type: options.bar_type,
-    bar_interval: options.bar_interval ?? null,
-    contract_lookback_months: options.contract_lookback_months ?? DEFAULT_CONTRACT_LOOKBACK_MONTHS,
-    extended: options.extended ?? null,
-    dadj: options.dadj ?? null,
-    badj: options.badj ?? null,
-    split: options.split ?? null,
-    settlement: options.settlement ?? null,
-  };
+function legacyMergedMarkerPath(filePath: string): string {
+  return path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${LEGACY_MERGED_MARKER_SUFFIX}`,
+  );
 }
 
 function historyRequestSignature(request: PlannedHistoryRequest): Record<string, unknown> {
