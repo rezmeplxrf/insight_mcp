@@ -607,7 +607,7 @@ function daysInMonth(year: number, month: number): number {
 }
 
 function timeframeLabel(barType: HistoryBarType, interval = 1): string {
-  const suffix = { second: "s", minute: "m", hour: "h", day: "d", week: "w", month: "mo" }[
+  const suffix = { second: "s", minute: "m", hour: "h", day: "D", week: "W", month: "M" }[
     barType
   ];
   return `${interval}${suffix}`;

@@ -426,7 +426,7 @@ describe("downloadHistory", () => {
       await assert.rejects(
         () =>
           readFile(
-            path.join(outputDir, "NASDAQ_AAPL", "1mo", "2024-01-01_2024-01-02.csv"),
+            path.join(outputDir, "NASDAQ_AAPL", "1M-local-wrong", "2024-01-01_2024-01-02.csv"),
             "utf8",
           ),
         /ENOENT/,
@@ -455,7 +455,7 @@ describe("downloadHistory", () => {
             calls.push({ method, pathTemplate, params });
             return {
               code: "NASDAQ:AAPL",
-              bar_type: "1d",
+              bar_type: "1D",
               series: [
                 { time: Date.UTC(2024, 0, 1) / 1000, close: 9 },
                 { time: Date.UTC(2024, 0, 2) / 1000, close: 10 },
@@ -477,7 +477,7 @@ describe("downloadHistory", () => {
       const mergedCsv = await readFile(result.merged_file!, "utf8");
       assert.equal(
         mergedCsv,
-        `code,bar_type,time,close\nNASDAQ:AAPL,1d,${Date.UTC(2024, 0, 2) / 1000},10\nNASDAQ:AAPL,1d,${Date.UTC(2024, 0, 3) / 1000},11\n`,
+        `code,bar_type,time,close\nNASDAQ:AAPL,1D,${Date.UTC(2024, 0, 2) / 1000},10\nNASDAQ:AAPL,1D,${Date.UTC(2024, 0, 3) / 1000},11\n`,
       );
     } finally {
       await rm(outputDir, { recursive: true, force: true });
