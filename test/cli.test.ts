@@ -707,7 +707,7 @@ describe("runCli", () => {
     assert.ok(questions.some((question) => question.includes("Settlement")));
   });
 
-  it("does not prompt for common filter/store options by default in interactive mode", async () => {
+  it("prompts for storage but not filter by default in interactive mode", async () => {
     const questions: string[] = [];
 
     await runCli(["get_fundamentals_meta"], {
@@ -726,7 +726,11 @@ describe("runCli", () => {
     assert.deepEqual(JSON.parse(output), {
       base: [{ id: "total_revenue" }, { id: "net_income" }],
     });
-    assert.deepEqual(questions, []);
+    assert.equal(questions.length, 1);
+    assert.ok(questions[0].includes("Store: Store original API response before filtering."));
+    assert.ok(questions[0].includes("Store (optional, choices: none/json"));
+    assert.ok(!questions[0].includes("csv"));
+    assert.ok(!questions.some((question) => question.includes("Filter")));
   });
 
   it("does not prompt for unsupported crypto screener country filters", async () => {
@@ -787,7 +791,9 @@ describe("runCli", () => {
       },
     });
 
-    assert.ok(output.includes("csv storage is only supported for get_symbol_series"));
+    assert.ok(
+      output.includes("csv storage is only supported for get_symbol_series and get_symbol_history"),
+    );
     assert.deepEqual(questions, []);
     assert.equal(exitCode, 1);
   });
@@ -1072,6 +1078,52 @@ describe("runCli", () => {
     }
   });
 
+  it("prompts for CSV storage for history tools in interactive mode", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-store-"));
+    const outputFile = path.join(outputDir, "history.csv");
+    const questions: string[] = [];
+
+    try {
+      const mockRequest = async () => ({
+        code: "NASDAQ:AAPL",
+        bar_type: "1m",
+        series: [{ time: 1, close: 10 }],
+      });
+      await runCli(
+        [
+          "get_symbol_history",
+          "--symbol",
+          "NASDAQ:AAPL",
+          "--bar_type",
+          "minute",
+          "--start_date",
+          "2024-01",
+        ],
+        {
+          write,
+          exit,
+          isInteractive: true,
+          prompt: async (question) => {
+            questions.push(question);
+            if (question.includes("Store")) return "csv";
+            if (question.includes("Output File")) return outputFile;
+            return "";
+          },
+          request: mockRequest,
+        },
+      );
+
+      assert.ok(questions.some((question) => question.includes("choices: none/json/csv")));
+      assert.deepEqual(JSON.parse(output), { stored_file: outputFile, format: "csv" });
+      assert.equal(
+        await readFile(outputFile, "utf8"),
+        "code,bar_type,time,close\nNASDAQ:AAPL,1m,1,10\n",
+      );
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("prompts for an output file when storage is enabled interactively", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-store-"));
     const outputFile = path.join(outputDir, "series.csv");
@@ -1206,7 +1258,9 @@ describe("runCli", () => {
       },
     );
 
-    assert.ok(output.includes("csv storage is only supported for get_symbol_series"));
+    assert.ok(
+      output.includes("csv storage is only supported for get_symbol_series and get_symbol_history"),
+    );
     assert.equal(exitCode, 1);
   });
 

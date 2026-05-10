@@ -12,7 +12,11 @@ import {
   validateOutputDirectory,
 } from "./history.js";
 import { validateHistoryIntervalArgs } from "./history-validation.js";
-import { type ResponseStoreFormat, validateResponseStorageTarget } from "./response-storage.js";
+import {
+  type ResponseStoreFormat,
+  supportsCsvStorage,
+  validateResponseStorageTarget,
+} from "./response-storage.js";
 import { analyzeSymbolCodes, shouldPromptSymbolScopedParam } from "./symbol-param-applicability.js";
 import { validateSymbolLikeArg } from "./symbol-validation.js";
 import { type ToolDefinition, toolDefinitions } from "./tool-definitions.js";
@@ -29,6 +33,18 @@ const STORAGE_DESTINATION_SCHEMA: Record<"output_file" | "output_dir", z.ZodType
     .describe("Directory for stored response when output_file is not set.")
     .optional(),
 };
+const JSON_STORE_SCHEMA = z
+  .enum(["none", "json"])
+  .default("none")
+  .optional()
+  .describe("Store original API response before filtering. Default: none.");
+const CSV_STORE_SCHEMA = z
+  .enum(["none", "json", "csv"])
+  .default("none")
+  .optional()
+  .describe(
+    "Store original API response before filtering. CSV is available for series/history responses. Default: none.",
+  );
 
 interface ParsedArgs {
   toolName: string | null;
@@ -261,7 +277,7 @@ export function buildToolHelp(tool: ToolDefinition): string {
     `  --${"filter".padEnd(24)} string [optional]  JSONata expression applied to the response.`,
   );
   lines.push(
-    `  --${"store".padEnd(24)} enum(none|json|csv) [optional]  Store the response locally. csv only supports get_symbol_series. Default: none.`,
+    `  --${"store".padEnd(24)} ${formatStoreTypeName(tool.name)} [optional]  ${formatStoreHelpDescription(tool.name)}`,
   );
   lines.push(`  --${"output_file".padEnd(24)} string [optional]  File path for stored response.`);
   lines.push(
@@ -278,6 +294,15 @@ export function buildToolHelp(tool: ToolDefinition): string {
   }
 
   return lines.join("\n");
+}
+
+function formatStoreTypeName(toolName: string): string {
+  return supportsCsvStorage(toolName) ? "enum(none|json|csv)" : "enum(none|json)";
+}
+
+function formatStoreHelpDescription(toolName: string): string {
+  const suffix = supportsCsvStorage(toolName) ? " CSV writes series/history rows." : "";
+  return `Store original API response before filtering.${suffix} Default: none.`;
 }
 
 function getZodDescription(t: z.ZodTypeAny): string {
@@ -576,6 +601,8 @@ async function resolveToolArgs(
         resolved[key] = answer;
       }
     }
+    const storageAnswer = await resolveInteractiveStorageMode(resolved, tool.name, io);
+    if (storageAnswer === null) return null;
     await resolveStorageDestination(resolved, tool.name, io);
   } else if (missingToolArgs(resolved, tool).length > 0) {
     return null;
@@ -584,6 +611,22 @@ async function resolveToolArgs(
   if (missingToolArgs(resolved, tool).length > 0) return null;
 
   return resolved;
+}
+
+async function resolveInteractiveStorageMode(
+  resolved: Record<string, string>,
+  toolName: string,
+  io: CliIO,
+): Promise<undefined | null> {
+  if (resolved.store !== undefined) return;
+
+  const answer = await promptForOptionalToolArg("store", storeModeSchema(toolName), io);
+  if (answer === null) return null;
+  if (answer !== undefined) resolved.store = answer;
+}
+
+function storeModeSchema(toolName: string): z.ZodTypeAny {
+  return supportsCsvStorage(toolName) ? CSV_STORE_SCHEMA : JSON_STORE_SCHEMA;
 }
 
 function shouldSkipInteractiveToolArg(
@@ -877,8 +920,8 @@ function hasArgValue(value: string | undefined): boolean {
 function validateStoreMode(toolName: string, store: string | undefined): string | null {
   if (store === undefined) return null;
   if (!["none", "json", "csv"].includes(store)) return "store must be none, json, or csv";
-  if (store === "csv" && toolName !== "get_symbol_series") {
-    return "csv storage is only supported for get_symbol_series";
+  if (store === "csv" && !supportsCsvStorage(toolName)) {
+    return "csv storage is only supported for get_symbol_series and get_symbol_history";
   }
   return null;
 }

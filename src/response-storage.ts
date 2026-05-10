@@ -19,14 +19,18 @@ export interface StoredResponse {
   format: Exclude<ResponseStoreFormat, "none">;
 }
 
+export function supportsCsvStorage(toolName: string): boolean {
+  return toolName === "get_symbol_series" || toolName === "get_symbol_history";
+}
+
 export function validateResponseStorage(options: ResponseStoreOptions): void {
   const format = options.store ?? "none";
   if (!["none", "json", "csv"].includes(format)) {
     throw new Error("store must be none, json, or csv");
   }
   if (format === "none") return;
-  if (format === "csv" && options.toolName !== "get_symbol_series") {
-    throw new Error("csv storage is only supported for get_symbol_series");
+  if (format === "csv" && !supportsCsvStorage(options.toolName)) {
+    throw new Error("csv storage is only supported for get_symbol_series and get_symbol_history");
   }
   if (!options.output_file && !options.output_dir) {
     throw new Error("output_file or output_dir is required when store is json or csv");
