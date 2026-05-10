@@ -220,6 +220,76 @@ describe("runCli", () => {
     assert.equal(exitCode, 0);
   });
 
+  it("prompts for a tool when run interactively without arguments", async () => {
+    const selectedToolIndex =
+      toolDefinitions.findIndex((tool) => tool.name === "get_fundamentals_meta") + 1;
+    const questions: string[] = [];
+
+    await runCli([], {
+      write,
+      exit,
+      isInteractive: true,
+      getAuthStatus: () => ({
+        authenticated: true,
+        source: "environment",
+        config_path: "/tmp/insightsentry/config.json",
+        key_present: true,
+        key_format_valid: true,
+        subject: "user@example.com",
+        message: "Logged in using INSIGHTSENTRY_API_KEY.",
+      }),
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.includes("Choose tool")) return String(selectedToolIndex);
+        return "";
+      },
+      request: async () => ({ ok: true }),
+    });
+
+    assert.ok(output.includes("Choose a tool"));
+    assert.ok(output.includes(`${selectedToolIndex}. get_fundamentals_meta`));
+    assert.ok(questions.some((question) => question.includes("Choose tool")));
+    assert.deepEqual(JSON.parse(output.slice(output.lastIndexOf("{"))), { ok: true });
+    assert.equal(exitCode, undefined);
+  });
+
+  it("prompts for an API key before the no-args interactive tool picker", async () => {
+    const selectedToolIndex =
+      toolDefinitions.findIndex((tool) => tool.name === "get_fundamentals_meta") + 1;
+    const apiKey = jwt({ uuid: "user@example.com", plan: "ultra" });
+    const questions: string[] = [];
+
+    await runCli([], {
+      write,
+      exit,
+      isInteractive: true,
+      getAuthStatus: () => ({
+        authenticated: false,
+        source: "none",
+        config_path: "/tmp/insightsentry/config.json",
+        key_present: false,
+        key_format_valid: false,
+        message: "Logged out. No API key found.",
+      }),
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.includes("API key")) return apiKey;
+        if (question.includes("Choose tool")) return String(selectedToolIndex);
+        return "";
+      },
+      request: async () => ({ ok: true }),
+    });
+
+    assert.ok(output.includes("No API key found"));
+    assert.ok(output.includes("API key saved"));
+    assert.ok(output.includes("Choose a tool"));
+    assert.ok(questions.some((question) => question.includes("API key")));
+    assert.ok(questions.some((question) => question.includes("Choose tool")));
+    assert.equal(loadConfig().apiKey, apiKey);
+    assert.deepEqual(JSON.parse(output.slice(output.lastIndexOf("{"))), { ok: true });
+    assert.equal(exitCode, undefined);
+  });
+
   it("shows tool help with tool --help", async () => {
     await runCli(["get_quotes", "--help"], { write, exit });
     assert.ok(output.includes("--codes"));

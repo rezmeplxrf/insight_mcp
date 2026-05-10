@@ -1,4 +1,5 @@
 import { stdin as input, stdout as output } from "node:process";
+import { emitKeypressEvents } from "node:readline";
 import { createInterface } from "node:readline/promises";
 import { z } from "zod";
 import { ApiClient } from "./api-client.js";
@@ -340,6 +341,7 @@ interface CliIO {
   request?: RequestFn;
   progress?: (s: string) => void;
   prompt?: (question: string) => Promise<string>;
+  selectTool?: (options: ToolSelectionOption[]) => Promise<string | null>;
   isInteractive?: boolean;
   getAuthStatus?: () => AuthStatus;
 }
@@ -347,8 +349,27 @@ interface CliIO {
 const REQUIRED_DOWNLOAD_HISTORY_ARGS = ["symbol", "bar_type", "from", "to", "output_dir"] as const;
 type RequiredDownloadHistoryArg = (typeof REQUIRED_DOWNLOAD_HISTORY_ARGS)[number];
 
+interface ToolSelectionOption {
+  name: string;
+  description: string;
+}
+
 export async function runCli(argv: string[], io: CliIO): Promise<void> {
-  const { toolName, args, help } = parseArgs(argv);
+  let { toolName, args, help } = parseArgs(argv);
+
+  if (!toolName) {
+    if (!help && io.isInteractive === true && io.prompt) {
+      toolName = await resolveInteractiveToolName(io);
+      if (!toolName) {
+        io.exit(1);
+        return;
+      }
+    } else {
+      io.write(buildHelp());
+      io.exit(0);
+      return;
+    }
+  }
 
   if (!toolName) {
     io.write(buildHelp());
@@ -540,6 +561,80 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     io.write(`Error: ${error.message}\n`);
     io.exit(1);
   }
+}
+
+async function resolveInteractiveToolName(io: CliIO): Promise<string | null> {
+  const status = (io.getAuthStatus ?? getAuthStatus)();
+  if (!status.authenticated) {
+    io.write(status.message);
+    const key = await resolveLoginKey({}, io);
+    if (!key) {
+      io.write(
+        "Usage: insight login --key <your-api-key>\n\nGet your API key from https://insightsentry.com/dashboard",
+      );
+      return null;
+    }
+    saveConfig({ apiKey: key });
+    io.write(`API key saved to ${getConfigLocation()}`);
+  }
+
+  const options = interactiveToolOptions();
+  if (io.selectTool) {
+    const selected = await io.selectTool(options);
+    if (!selected) io.write("No tool selected.");
+    return selected;
+  }
+
+  io.write(buildInteractiveToolList(options));
+  for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
+    const answer = (await io.prompt?.("Choose tool (number or name): "))?.trim() ?? "";
+    const selected = parseToolSelection(answer, options);
+    if (selected) return selected;
+    io.write("Invalid tool selection.");
+  }
+
+  io.write("No tool selected.");
+  return null;
+}
+
+function interactiveToolOptions(): ToolSelectionOption[] {
+  return [
+    ...toolDefinitions.map((tool) => ({
+      name: tool.name,
+      description: summarizeToolDescription(tool.description),
+    })),
+    {
+      name: DOWNLOAD_HISTORY_COMMAND,
+      description: "Download historical ranges to JSON/CSV files",
+    },
+  ];
+}
+
+function buildInteractiveToolList(options: ToolSelectionOption[]): string {
+  return [
+    "Choose a tool:",
+    "",
+    ...options.map((option, index) => `${index + 1}. ${option.name} - ${option.description}`),
+    "",
+    "Use arrow keys in a TTY, or type a number/name.",
+  ].join("\n");
+}
+
+function summarizeToolDescription(description: string): string {
+  return description.split("→")[0].split(".")[0].trim();
+}
+
+function parseToolSelection(rawSelection: string, options: ToolSelectionOption[]): string | null {
+  const selection = rawSelection.trim();
+  if (!selection) return null;
+
+  const number = Number(selection);
+  if (Number.isInteger(number) && number >= 1 && number <= options.length) {
+    return options[number - 1].name;
+  }
+
+  const normalized = selection.toLowerCase();
+  return options.find((option) => option.name.toLowerCase() === normalized)?.name ?? null;
 }
 
 async function resolveLoginKey(args: Record<string, string>, io: CliIO): Promise<string | null> {
@@ -1157,13 +1252,124 @@ function getPromptHint(zodType: z.ZodTypeAny): string | null {
   return hint;
 }
 
+function canUseKeyboardToolSelection(): boolean {
+  return (
+    input.isTTY === true &&
+    output.isTTY === true &&
+    typeof input.setRawMode === "function" &&
+    process.env.CI !== "true"
+  );
+}
+
+function selectToolWithKeyboard(options: ToolSelectionOption[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    let selectedIndex = 0;
+    let typed = "";
+    let error = "";
+    let closed = false;
+    const wasRaw = input.isRaw;
+
+    const render = () => {
+      output.write("\x1B[2J\x1B[H\x1B[?25l");
+      output.write("Choose a tool:\n\n");
+      for (const [index, option] of options.entries()) {
+        const marker = index === selectedIndex ? ">" : " ";
+        output.write(`${marker} ${index + 1}. ${option.name} - ${option.description}\n`);
+      }
+      output.write("\nUse Up/Down, Enter, or type a number/name.");
+      output.write(`\nChoose tool: ${typed}`);
+      if (error) output.write(`\n${error}`);
+    };
+
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      input.off("keypress", onKeypress);
+      input.setRawMode(Boolean(wasRaw));
+      output.write("\x1B[?25h\n");
+    };
+
+    const finish = (toolName: string | null) => {
+      cleanup();
+      resolve(toolName);
+    };
+
+    const updateSelectedFromTyped = () => {
+      const selected = parseToolSelection(typed, options);
+      if (!selected) return;
+      selectedIndex = options.findIndex((option) => option.name === selected);
+    };
+
+    const onKeypress = (
+      value: string,
+      key: { ctrl?: boolean; name?: string; sequence?: string },
+    ) => {
+      if (key.ctrl && key.name === "c") {
+        finish(null);
+        return;
+      }
+      if (key.name === "escape") {
+        finish(null);
+        return;
+      }
+      if (key.name === "up") {
+        selectedIndex = selectedIndex === 0 ? options.length - 1 : selectedIndex - 1;
+        typed = "";
+        error = "";
+        render();
+        return;
+      }
+      if (key.name === "down") {
+        selectedIndex = selectedIndex === options.length - 1 ? 0 : selectedIndex + 1;
+        typed = "";
+        error = "";
+        render();
+        return;
+      }
+      if (key.name === "return" || key.name === "enter") {
+        const selected = typed.trim()
+          ? parseToolSelection(typed, options)
+          : options[selectedIndex].name;
+        if (selected) {
+          finish(selected);
+          return;
+        }
+        error = "Invalid tool selection.";
+        render();
+        return;
+      }
+      if (key.name === "backspace") {
+        typed = typed.slice(0, -1);
+        error = "";
+        updateSelectedFromTyped();
+        render();
+        return;
+      }
+      if (value && value >= " " && !key.ctrl && key.sequence !== "\x7F") {
+        typed += value;
+        error = "";
+        updateSelectedFromTyped();
+        render();
+      }
+    };
+
+    emitKeypressEvents(input);
+    input.setRawMode(true);
+    input.resume();
+    input.on("keypress", onKeypress);
+    render();
+  });
+}
+
 export function main() {
   const rl = createInterface({ input, output });
+  const interactive = process.stdin.isTTY && process.stdout.isTTY && process.env.CI !== "true";
   runCli(process.argv.slice(2), {
     write: (s) => process.stdout.write(`${s}\n`),
     progress: (s) => process.stderr.write(`${s}\n`),
     prompt: (question) => rl.question(question),
-    isInteractive: process.stdin.isTTY && process.stdout.isTTY && process.env.CI !== "true",
+    selectTool: canUseKeyboardToolSelection() ? selectToolWithKeyboard : undefined,
+    isInteractive: interactive,
     exit: (code) => process.exit(code),
   }).finally(() => rl.close());
 }
