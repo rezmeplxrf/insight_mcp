@@ -135,6 +135,34 @@ describe("tool runner", () => {
     }
   });
 
+  it("returns filtered data when default empty-filter storage cannot be written", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "insight-runner-"));
+    const cwd = process.cwd();
+
+    try {
+      process.chdir(tempDir);
+      await writeFile(".tmp", "not a directory", "utf8");
+
+      const result = await runApiTool({
+        toolName: "search_symbols",
+        method: "GET",
+        pathTemplate: "/symbols",
+        args: {
+          query: "apple",
+          filter: "symbols[code='NASDAQ:MSFT']",
+        },
+        request: async () => ({
+          symbols: [{ code: "NASDAQ:AAPL", name: "Apple" }],
+        }),
+      });
+
+      assert.equal(result, null);
+    } finally {
+      process.chdir(cwd);
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses the requested storage path when filtered stored data is empty", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-runner-"));
     const outputFile = path.join(outputDir, "symbols.json");

@@ -69,9 +69,12 @@ export async function runApiTool(options: RunApiToolOptions): Promise<any> {
     if (!isEmptyFilteredResult(filtered)) return filtered;
 
     const original =
-      stored ?? (await storeEmptyFilterOriginalResponse(result, options.toolName, apiArgs));
+      stored ?? (await tryStoreEmptyFilterOriginalResponse(result, options.toolName, apiArgs));
+    const emptyFiltered = filtered === undefined ? null : filtered;
+    if (!original) return emptyFiltered;
+
     return {
-      filtered: filtered === undefined ? null : filtered,
+      filtered: emptyFiltered,
       message: `Filtered data is empty. Original response stored at ${original.stored_file}.`,
       original_response_file: original.stored_file,
     };
@@ -86,6 +89,18 @@ function isEmptyFilteredResult(value: unknown): boolean {
   if (typeof value === "string") return value.length === 0;
   if (typeof value === "object") return Object.keys(value).length === 0;
   return false;
+}
+
+async function tryStoreEmptyFilterOriginalResponse(
+  response: any,
+  toolName: string,
+  requestParams: Record<string, any>,
+) {
+  try {
+    return await storeEmptyFilterOriginalResponse(response, toolName, requestParams);
+  } catch {
+    return null;
+  }
 }
 
 async function storeEmptyFilterOriginalResponse(
