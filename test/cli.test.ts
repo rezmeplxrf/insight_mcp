@@ -1196,6 +1196,52 @@ describe("runCli", () => {
     }
   });
 
+  it("requires and reprompts for interactive storage output directory when output file is skipped", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-store-"));
+    const invalidOutputDir = path.join(outputDir, "not-a-dir");
+    const validOutputDir = path.join(outputDir, "stored");
+    const outputDirAnswers = [invalidOutputDir, validOutputDir];
+    const questions: string[] = [];
+    let requestCount = 0;
+
+    try {
+      await writeFile(invalidOutputDir, "not a directory");
+      const mockRequest = async () => {
+        requestCount += 1;
+        return {
+          code: "NASDAQ:AAPL",
+          bar_type: "1D",
+          series: [{ time: 1, close: 10 }],
+        };
+      };
+      await runCli(
+        ["get_symbol_series", "--symbol", "NASDAQ:AAPL", "--bar_type", "day", "--store", "csv"],
+        {
+          write,
+          exit,
+          isInteractive: true,
+          prompt: async (question) => {
+            questions.push(question);
+            if (question.includes("Output File")) return "";
+            if (question.includes("Output Dir")) return outputDirAnswers.shift() ?? "";
+            return "";
+          },
+          request: mockRequest,
+        },
+      );
+
+      assert.equal(requestCount, 1);
+      assert.ok(output.includes("Invalid Output Dir"));
+      assert.ok(questions.some((question) => question.includes("Output Dir (required")));
+      const parsed = JSON.parse(output.slice(output.indexOf("{")));
+      assert.equal(parsed.format, "csv");
+      assert.ok(parsed.stored_file.startsWith(validOutputDir));
+      assert.deepEqual(await readdir(validOutputDir), [path.basename(parsed.stored_file)]);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails before request when storage destination is missing non-interactively", async () => {
     await runCli(
       ["get_symbol_series", "--symbol", "NASDAQ:AAPL", "--bar_type", "day", "--store", "csv"],

@@ -684,15 +684,39 @@ async function resolveStorageDestination(
   }
 
   if (!resolved.output_file && !resolved.output_dir) {
-    const answer = await promptForOptionalStorageDestinationArg(
+    const answer = await promptForStorageDestinationArg(
       "output_dir",
       STORAGE_DESTINATION_SCHEMA.output_dir,
       resolved,
       toolName,
       io,
     );
-    if (answer !== null && answer !== undefined) resolved.output_dir = answer;
+    if (answer !== null) resolved.output_dir = answer;
   }
+}
+
+async function promptForStorageDestinationArg(
+  key: "output_file" | "output_dir",
+  zodType: z.ZodTypeAny,
+  resolved: Record<string, string>,
+  toolName: string,
+  io: CliIO,
+): Promise<string | null> {
+  const label = toolPromptLabel(key);
+  const question = promptQuestion(label, zodType, "required");
+  for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
+    const answer = (await io.prompt?.(question))?.trim() ?? "";
+    const error = validateToolArgAnswer(key, zodType, answer);
+    if (error) {
+      io.write(`Invalid ${label}: ${error}\n`);
+      continue;
+    }
+
+    const storageError = await validateStorageDestinationAnswer(key, resolved, toolName, answer);
+    if (!storageError) return answer;
+    io.write(`Invalid ${label}: ${storageError}\n`);
+  }
+  return null;
 }
 
 async function promptForOptionalStorageDestinationArg(
