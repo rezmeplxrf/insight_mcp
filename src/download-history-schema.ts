@@ -36,6 +36,13 @@ export const downloadHistorySchema: Record<string, z.ZodTypeAny> = {
   contract_lookback_months: z.number().int().min(1).default(6).optional(),
   overwrite: z.boolean().default(false).optional(),
   extended: z.boolean().default(true).optional().describe("Extended hours. Default is true."),
+  split: z
+    .boolean()
+    .default(true)
+    .optional()
+    .describe(
+      "Split adjustment for equities and ETFs. When false, returns non-split-adjusted data and dadj is ignored. Default is true.",
+    ),
   dadj: z.boolean().default(false).optional().describe("Dividend adjustment. Default is false."),
   badj: z.boolean().default(true).optional().describe("Back-adjustment. Default is true."),
   settlement: z

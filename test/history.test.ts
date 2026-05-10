@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -115,7 +115,7 @@ describe("planHistoryRequests", () => {
     );
   });
 
-  it("passes only Rust /history-supported optional query params", async () => {
+  it("passes only API-supported optional history query params", async () => {
     const plan = await planHistoryRequests(
       {
         symbol: "NASDAQ:AAPL",
@@ -127,6 +127,7 @@ describe("planHistoryRequests", () => {
         extended: false,
         dadj: true,
         badj: false,
+        split: false,
         settlement: true,
       },
       { request: async () => assert.fail("regular symbols should not fetch contracts") },
@@ -140,6 +141,7 @@ describe("planHistoryRequests", () => {
       extended: false,
       dadj: true,
       badj: false,
+      split: false,
       settlement: true,
     });
   });
@@ -220,6 +222,40 @@ describe("planHistoryRequests", () => {
       /bar_interval/,
     );
   });
+
+  it("rejects bar intervals unsupported by the selected history bar type", async () => {
+    await assert.rejects(
+      () =>
+        planHistoryRequests(
+          {
+            symbol: "NASDAQ:AAPL",
+            from: "2024-01-01",
+            to: "2024-01-01",
+            bar_type: "second",
+            bar_interval: 2,
+            output_dir: "data",
+          },
+          { request: async () => assert.fail("regular symbols should not fetch contracts") },
+        ),
+      /second.*1, 5, 10, 15, 30, 45/,
+    );
+
+    await assert.rejects(
+      () =>
+        planHistoryRequests(
+          {
+            symbol: "NASDAQ:AAPL",
+            from: "2024-01",
+            to: "2024-01",
+            bar_type: "hour",
+            bar_interval: 25,
+            output_dir: "data",
+          },
+          { request: async () => assert.fail("regular symbols should not fetch contracts") },
+        ),
+      /hour.*1 and 24/,
+    );
+  });
 });
 
 describe("responseToCsv", () => {
@@ -246,6 +282,35 @@ describe("responseToCsv", () => {
 });
 
 describe("downloadHistory", () => {
+  it("validates the output directory before making API requests", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
+    const outputFile = path.join(tempDir, "not-a-directory");
+
+    try {
+      await writeFile(outputFile, "not a directory", "utf8");
+      await assert.rejects(
+        () =>
+          downloadHistory(
+            {
+              symbol: "CME_MINI:NQ1!",
+              from: "2024-01",
+              to: "2024-01",
+              bar_type: "hour",
+              output_dir: outputFile,
+              format: "json",
+            },
+            {
+              request: async () =>
+                assert.fail("invalid output_dir should fail before API requests"),
+            },
+          ),
+        /output_dir is not writable/,
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("saves requested history as CSV and reports progress", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
     const progress: string[] = [];

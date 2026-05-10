@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { validateHistoryBarInterval } from "./history-validation.js";
 
 export type HistoryBarType = "second" | "minute" | "hour" | "day" | "week" | "month";
 export type HistoryOutputFormat = "json" | "csv" | "both";
@@ -26,6 +28,7 @@ export interface DownloadHistoryOptions {
   extended?: boolean;
   dadj?: boolean;
   badj?: boolean;
+  split?: boolean;
   settlement?: boolean;
 }
 
@@ -107,6 +110,7 @@ export async function downloadHistory(
   const format = options.format ?? "csv";
   const concurrency = normalizeConcurrency(options.concurrency);
   const shouldMergeCsv = options.merge ?? true;
+  await validateOutputDirectory(options.output_dir);
   const plan = await planHistoryRequests(options, deps);
   const mergeCsvFilesByRequestIndex = new Map<number, string[]>();
   const createdCsvFiles = new Set<string>();
@@ -268,6 +272,24 @@ export async function downloadHistory(
   }
 
   return result;
+}
+
+export async function validateOutputDirectory(outputDir: string): Promise<void> {
+  const resolved = path.resolve(outputDir);
+  const probePath = path.join(resolved, `.insight-history-write-test-${randomUUID()}`);
+  try {
+    await mkdir(resolved, { recursive: true });
+    await writeFile(probePath, "", "utf8");
+    await unlink(probePath);
+  } catch (error: any) {
+    try {
+      await unlink(probePath);
+    } catch {
+      // Ignore cleanup errors from a failed probe.
+    }
+    const message = error?.message ?? String(error);
+    throw new Error(`output_dir is not writable: ${resolved} (${message})`);
+  }
 }
 
 export function responseToCsv(response: any): string {
@@ -436,7 +458,7 @@ async function fetchContractSchedule(
 
 function optionalHistoryParams(options: DownloadHistoryOptions): Record<string, any> {
   const params: Record<string, any> = {};
-  for (const key of ["bar_interval", "extended", "dadj", "badj", "settlement"] as const) {
+  for (const key of ["bar_interval", "extended", "dadj", "badj", "split", "settlement"] as const) {
     if (options[key] !== undefined) params[key] = options[key];
   }
   return params;
@@ -458,14 +480,8 @@ function validateOptions(options: DownloadHistoryOptions): void {
   if (options.format && !["json", "csv", "both"].includes(options.format)) {
     throw new Error("format must be json, csv, or both");
   }
-  if (
-    options.bar_interval !== undefined &&
-    (!Number.isInteger(options.bar_interval) ||
-      options.bar_interval < 1 ||
-      options.bar_interval > 1440)
-  ) {
-    throw new Error("bar_interval must be an integer between 1 and 1440");
-  }
+  const intervalError = validateHistoryBarInterval(options.bar_type, options.bar_interval);
+  if (intervalError) throw new Error(intervalError);
   if (
     options.contract_lookback_months !== undefined &&
     (!Number.isInteger(options.contract_lookback_months) || options.contract_lookback_months < 1)

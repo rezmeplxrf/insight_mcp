@@ -266,6 +266,9 @@ const PARAM_DESCRIPTION_OVERRIDES: Record<string, string> = {
     "If true, invalid fields, exchanges, or countries are silently filtered out instead of returning an error. Useful when you're unsure if a field exists.",
 };
 
+const SCREENER_MAX_RANGE_ZOD =
+  'z.number().int().describe("Number of screener results returned per page. The API gateway clamps values below 1000 to 1000 and values above 15000 to 15000.")';
+
 interface ParamInfo {
   name: string;
   zodExpr: string;
@@ -288,7 +291,10 @@ function collectParams(
     if (!param.name || seen.has(param.name)) continue;
     seen.add(param.name);
 
-    const zodExpr = schemaToZod(param.schema || {}, param.description);
+    let zodExpr = schemaToZod(param.schema || {}, param.description);
+    if (toolName?.startsWith("screen_") && param.name === "max_range") {
+      zodExpr = SCREENER_MAX_RANGE_ZOD;
+    }
     params.push({
       name: param.name,
       zodExpr,
@@ -324,7 +330,10 @@ function collectParams(
             (toolName && TOOL_PARAM_OVERRIDES[toolName]?.[name]) ||
             PARAM_DESCRIPTION_OVERRIDES[name] ||
             propSchema.description;
-          const zodExpr = schemaToZod(propSchema, desc);
+          let zodExpr = schemaToZod(propSchema, desc);
+          if (toolName?.startsWith("screen_") && name === "max_range") {
+            zodExpr = SCREENER_MAX_RANGE_ZOD;
+          }
           params.push({
             name,
             zodExpr,

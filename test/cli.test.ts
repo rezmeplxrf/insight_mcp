@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, it } from "node:test";
@@ -339,7 +339,8 @@ describe("runCli", () => {
       prompt: async (question) => {
         questions.push(question);
         if (question.includes("Bar Type")) return "minute";
-        if (question.includes("Settlement")) return "true";
+        if (question.includes("Split")) return "true";
+        if (question.includes("Dadj")) return "true";
         return "";
       },
     });
@@ -347,46 +348,131 @@ describe("runCli", () => {
     const parsed = JSON.parse(output);
     assert.equal(parsed.symbol, "NASDAQ:AAPL");
     assert.equal(parsed.bar_type, "minute");
-    assert.equal(parsed.settlement, true);
+    assert.equal(parsed.split, true);
+    assert.equal(parsed.dadj, true);
     assert.ok(questions.some((question) => question.includes("Bar Type")));
     assert.ok(questions.some((question) => question.includes("Default: day")));
-    assert.ok(questions.some((question) => question.includes("Settlement")));
+    assert.ok(questions.some((question) => question.includes("Split")));
+    assert.ok(questions.some((question) => question.includes("Dadj")));
+    assert.ok(!questions.some((question) => question.includes("Badj")));
+    assert.ok(!questions.some((question) => question.includes("Settlement")));
     assert.ok(questions.some((question) => question.includes("Default: false")));
   });
 
-  it("prompts for common tool options in interactive mode", async () => {
-    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-common-"));
-    const outputFile = path.join(outputDir, "meta.json");
+  it("skips dadj after split is disabled with a boolean alias in interactive mode", async () => {
+    const questions: string[] = [];
+    const mockRequest = async (
+      _method: string,
+      _pathTemplate: string,
+      params: Record<string, any>,
+    ) => params;
+
+    await runCli(["get_symbol_series", "--symbol", "NASDAQ:AAPL"], {
+      write,
+      exit,
+      request: mockRequest,
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.includes("Bar Type")) return "minute";
+        if (question.includes("Split")) return "no";
+        return "";
+      },
+    });
+
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.split, false);
+    assert.equal(parsed.dadj, undefined);
+    assert.ok(questions.some((question) => question.includes("Split")));
+    assert.ok(!questions.some((question) => question.includes("Dadj")));
+  });
+
+  it("skips equity-only prompts for interactive futures symbols", async () => {
+    const questions: string[] = [];
+    const mockRequest = async (
+      _method: string,
+      _pathTemplate: string,
+      params: Record<string, any>,
+    ) => params;
+
+    await runCli(["get_symbol_series", "--symbol", "CME_MINI:NQ1!"], {
+      write,
+      exit,
+      request: mockRequest,
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.includes("Bar Type")) return "hour";
+        if (question.includes("Badj")) return "true";
+        if (question.includes("Settlement")) return "true";
+        return "";
+      },
+    });
+
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.symbol, "CME_MINI:NQ1!");
+    assert.equal(parsed.bar_type, "hour");
+    assert.equal(parsed.badj, true);
+    assert.equal(parsed.settlement, true);
+    assert.ok(!questions.some((question) => question.includes("Extended")));
+    assert.ok(!questions.some((question) => question.includes("Split")));
+    assert.ok(!questions.some((question) => question.includes("Dadj")));
+    assert.ok(questions.some((question) => question.includes("Badj")));
+    assert.ok(questions.some((question) => question.includes("Settlement")));
+  });
+
+  it("skips continuous-only prompts for specific futures symbols", async () => {
+    const questions: string[] = [];
+    const mockRequest = async (
+      _method: string,
+      _pathTemplate: string,
+      params: Record<string, any>,
+    ) => params;
+
+    await runCli(["get_symbol_series", "--symbol", "CME_MINI:NQH2026"], {
+      write,
+      exit,
+      request: mockRequest,
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        if (question.includes("Bar Type")) return "hour";
+        if (question.includes("Settlement")) return "true";
+        return "";
+      },
+    });
+
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.symbol, "CME_MINI:NQH2026");
+    assert.equal(parsed.bar_type, "hour");
+    assert.equal(parsed.settlement, true);
+    assert.ok(!questions.some((question) => question.includes("Extended")));
+    assert.ok(!questions.some((question) => question.includes("Split")));
+    assert.ok(!questions.some((question) => question.includes("Dadj")));
+    assert.ok(!questions.some((question) => question.includes("Badj")));
+    assert.ok(questions.some((question) => question.includes("Settlement")));
+  });
+
+  it("does not prompt for common filter/store options by default in interactive mode", async () => {
     const questions: string[] = [];
 
-    try {
-      await runCli(["get_fundamentals_meta"], {
-        write,
-        exit,
-        request: async () => ({
-          base: [{ id: "total_revenue" }, { id: "net_income" }],
-        }),
-        isInteractive: true,
-        prompt: async (question) => {
-          questions.push(question);
-          if (question.includes("Filter")) return "base.id";
-          if (question.includes("Store")) return "json";
-          if (question.includes("Output File")) return outputFile;
-          return "";
-        },
-      });
-
-      assert.deepEqual(JSON.parse(output), ["total_revenue", "net_income"]);
-      assert.deepEqual(JSON.parse(await readFile(outputFile, "utf8")), {
+    await runCli(["get_fundamentals_meta"], {
+      write,
+      exit,
+      request: async () => ({
         base: [{ id: "total_revenue" }, { id: "net_income" }],
-      });
-      assert.ok(questions.some((question) => question.includes("Filter")));
-      assert.ok(questions.some((question) => question.includes("Store")));
-      assert.ok(questions.some((question) => question.includes("Default: none")));
-      assert.ok(questions.some((question) => question.includes("Output File")));
-    } finally {
-      await rm(outputDir, { recursive: true, force: true });
-    }
+      }),
+      isInteractive: true,
+      prompt: async (question) => {
+        questions.push(question);
+        return "";
+      },
+    });
+
+    assert.deepEqual(JSON.parse(output), {
+      base: [{ id: "total_revenue" }, { id: "net_income" }],
+    });
+    assert.deepEqual(questions, []);
   });
 
   it("validates provided tool arguments before calling the API", async () => {
@@ -399,6 +485,48 @@ describe("runCli", () => {
     assert.ok(output.includes("Invalid Bar Type"));
     assert.ok(output.includes("second, minute, hour"));
     assert.equal(exitCode, 1);
+  });
+
+  it("validates history bar intervals before calling the API", async () => {
+    await runCli(
+      [
+        "get_symbol_history",
+        "--symbol",
+        "NASDAQ:AAPL",
+        "--bar_type",
+        "second",
+        "--start_date",
+        "2024-01-01",
+        "--bar_interval",
+        "2",
+      ],
+      {
+        write,
+        exit,
+        request: async () => assert.fail("invalid interval should fail before request"),
+      },
+    );
+
+    assert.ok(output.includes("Invalid Bar Interval"));
+    assert.ok(output.includes("1, 5, 10, 15, 30, 45"));
+    assert.equal(exitCode, 1);
+  });
+
+  it("allows screener max_range values that the API gateway clamps", async () => {
+    const calls: Record<string, any>[] = [];
+
+    await runCli(["screen_stocks", "--fields", "close", "--max_range", "10"], {
+      write,
+      exit,
+      request: async (_method, _pathTemplate, params) => {
+        calls.push(params);
+        return { data: [] };
+      },
+    });
+
+    assert.deepEqual(calls, [{ fields: ["close"], max_range: 10 }]);
+    assert.deepEqual(JSON.parse(output), { data: [] });
+    assert.equal(exitCode, undefined);
   });
 
   it("validates symbol code format before calling the API", async () => {
@@ -617,6 +745,47 @@ describe("runCli", () => {
     }
   });
 
+  it("reprompts for an invalid interactive storage output file", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-store-"));
+    const invalidOutputFile = await mkdtemp(path.join(outputDir, "not-a-file-"));
+    const validOutputFile = path.join(outputDir, "series.csv");
+    const outputFileAnswers = [invalidOutputFile, validOutputFile];
+    let requestCount = 0;
+
+    try {
+      const mockRequest = async () => {
+        requestCount += 1;
+        return {
+          code: "NASDAQ:AAPL",
+          bar_type: "1D",
+          series: [{ time: 1, close: 10 }],
+        };
+      };
+      await runCli(
+        ["get_symbol_series", "--symbol", "NASDAQ:AAPL", "--bar_type", "day", "--store", "csv"],
+        {
+          write,
+          exit,
+          isInteractive: true,
+          prompt: async (question) =>
+            question.includes("Output File") ? (outputFileAnswers.shift() ?? "") : "",
+          request: mockRequest,
+        },
+      );
+
+      assert.equal(requestCount, 1);
+      assert.ok(output.includes("Invalid Output File"));
+      const parsed = JSON.parse(output.slice(output.indexOf("{")));
+      assert.deepEqual(parsed, { stored_file: validOutputFile, format: "csv" });
+      assert.equal(
+        await readFile(validOutputFile, "utf8"),
+        "code,bar_type,time,close\nNASDAQ:AAPL,1D,1,10\n",
+      );
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails before request when storage destination is missing non-interactively", async () => {
     await runCli(
       ["get_symbol_series", "--symbol", "NASDAQ:AAPL", "--bar_type", "day", "--store", "csv"],
@@ -755,6 +924,49 @@ describe("runCli", () => {
     }
   });
 
+  it("reprompts for an invalid interactive download_history output directory", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
+    const invalidOutputDir = path.join(tempDir, "not-a-directory");
+    const validOutputDir = path.join(tempDir, "valid-output");
+    const outputDirAnswers = [invalidOutputDir, validOutputDir];
+    let requestCount = 0;
+    const answers = new Map([
+      ["Symbol: ", "NASDAQ:AAPL"],
+      ["Bar type (second/minute/hour/day/week/month): ", "minute"],
+      ["From (YYYY-MM or YYYY-MM-DD): ", "2024-01"],
+      ["To (YYYY-MM or YYYY-MM-DD): ", "2024-01"],
+    ]);
+
+    try {
+      await writeFile(invalidOutputDir, "not a directory", "utf8");
+      await runCli(["download_history"], {
+        write,
+        exit,
+        isInteractive: true,
+        prompt: async (question) => {
+          if (question === "Output directory: ") return outputDirAnswers.shift() ?? "";
+          return answers.get(question) ?? "";
+        },
+        request: async () => {
+          requestCount += 1;
+          return {
+            code: "NASDAQ:AAPL",
+            bar_type: "1m",
+            series: [{ time: 1, close: 10 }],
+          };
+        },
+      });
+
+      assert.equal(requestCount, 1);
+      assert.ok(output.includes("Invalid Output directory"));
+      const parsed = JSON.parse(output.slice(output.indexOf("{")));
+      assert.equal(parsed.output_dir, path.resolve(validOutputDir));
+      assert.equal(parsed.failed, 0);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("prompts for optional download_history arguments in interactive mode", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
     const questions: string[] = [];
@@ -782,12 +994,14 @@ describe("runCli", () => {
             questions.push(question);
             if (question.includes("Format")) return "json";
             if (question.includes("Merge")) return "false";
+            if (question.includes("Split")) return "false";
             if (question.includes("Extended")) return "true";
             return "";
           },
           request: async (_method, _pathTemplate, params) => ({
             code: params.symbol,
             format: params.format,
+            split: params.split,
             extended: params.extended,
             bar_type: "1m",
             series: [{ time: 1, close: 10 }],
@@ -803,11 +1017,75 @@ describe("runCli", () => {
       assert.ok(questions.some((question) => question.includes("Default: csv")));
       assert.ok(questions.some((question) => question.includes("Merge")));
       assert.ok(questions.some((question) => question.includes("Default: true")));
+      assert.ok(questions.some((question) => question.includes("Split")));
       assert.ok(questions.some((question) => question.includes("Extended")));
-      assert.ok(questions.some((question) => question.includes("Dadj")));
+      assert.ok(!questions.some((question) => question.includes("Dadj")));
+      assert.ok(!questions.some((question) => question.includes("Badj")));
+      assert.ok(!questions.some((question) => question.includes("Settlement")));
+      assert.ok(questions.some((question) => question.includes("Default: false")));
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips symbol-incompatible download_history prompts in interactive mode", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-cli-history-"));
+    const questions: string[] = [];
+
+    try {
+      await runCli(
+        [
+          "download_history",
+          "--symbol",
+          "CME_MINI:NQ1!",
+          "--bar_type",
+          "hour",
+          "--from",
+          "2024-01",
+          "--to",
+          "2024-01",
+          "--output_dir",
+          outputDir,
+          "--format",
+          "json",
+          "--merge",
+          "false",
+        ],
+        {
+          write,
+          exit,
+          isInteractive: true,
+          prompt: async (question) => {
+            questions.push(question);
+            if (question.includes("Badj")) return "true";
+            if (question.includes("Settlement")) return "true";
+            return "";
+          },
+          request: async (_method, pathTemplate, params) => {
+            if (pathTemplate.includes("/contracts")) {
+              return {
+                base_code: "CME_MINI:NQ",
+                contracts: [{ code: "CME_MINI:NQF2024", settlement_date: "20240119" }],
+              };
+            }
+            return {
+              code: params.symbol,
+              badj: params.badj,
+              settlement: params.settlement,
+              bar_type: "1h",
+              series: [{ time: 1, close: 10 }],
+            };
+          },
+        },
+      );
+
+      const parsed = JSON.parse(output);
+      assert.equal(parsed.failed, 0);
+      assert.ok(!questions.some((question) => question.includes("Extended")));
+      assert.ok(!questions.some((question) => question.includes("Split")));
+      assert.ok(!questions.some((question) => question.includes("Dadj")));
       assert.ok(questions.some((question) => question.includes("Badj")));
       assert.ok(questions.some((question) => question.includes("Settlement")));
-      assert.ok(questions.some((question) => question.includes("Default: false")));
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }

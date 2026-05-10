@@ -1,8 +1,9 @@
 import jsonata from "jsonata";
+import { validateHistoryIntervalArgs } from "./history-validation.js";
 import {
   type ResponseStoreFormat,
   storeResponse,
-  validateResponseStorage,
+  validateResponseStorageTarget,
 } from "./response-storage.js";
 import { validateSymbolLikeArgs } from "./symbol-validation.js";
 
@@ -34,7 +35,11 @@ export async function runApiTool(options: RunApiToolOptions): Promise<any> {
   if (symbolValidationError) {
     throw new Error(`Invalid ${symbolValidationError.key}: ${symbolValidationError.error}`);
   }
-  validateResponseStorage(storeOptions);
+  const historyIntervalError = validateHistoryIntervalArgs(options.toolName, apiArgs);
+  if (historyIntervalError) {
+    throw new Error(`Invalid ${historyIntervalError.key}: ${historyIntervalError.error}`);
+  }
+  await validateResponseStorageTarget(storeOptions);
   const result = await options.request(options.method, options.pathTemplate, apiArgs);
   const stored = await storeResponse(result, storeOptions);
 

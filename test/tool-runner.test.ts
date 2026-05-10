@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -125,6 +125,35 @@ describe("tool runner", () => {
     );
   });
 
+  it("rejects invalid storage targets before calling the API", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "insight-runner-"));
+    const outputDirFile = path.join(tempDir, "not-a-directory");
+    const request: ApiToolRequestFn = async () =>
+      assert.fail("invalid storage target should fail before request");
+
+    try {
+      await writeFile(outputDirFile, "not a directory", "utf8");
+
+      await assert.rejects(
+        () =>
+          runApiTool({
+            toolName: "search_symbols",
+            method: "GET",
+            pathTemplate: "/symbols",
+            args: {
+              query: "apple",
+              store: "json",
+              output_dir: outputDirFile,
+            },
+            request,
+          }),
+        /storage target is not writable/,
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects invalid symbol codes before calling the API", async () => {
     const request: ApiToolRequestFn = async () =>
       assert.fail("invalid symbol should fail before request");
@@ -156,6 +185,28 @@ describe("tool runner", () => {
           request,
         }),
       /Invalid codes: AAPL: expected EXCHANGE:SYMBOL format/,
+    );
+  });
+
+  it("rejects history bar intervals unsupported by the selected bar type before request", async () => {
+    const request: ApiToolRequestFn = async () =>
+      assert.fail("invalid interval should fail before request");
+
+    await assert.rejects(
+      () =>
+        runApiTool({
+          toolName: "get_symbol_history",
+          method: "GET",
+          pathTemplate: "/symbols/{symbol}/history",
+          args: {
+            symbol: "NASDAQ:AAPL",
+            bar_type: "hour",
+            start_date: "2024-01",
+            bar_interval: 25,
+          },
+          request,
+        }),
+      /Invalid bar_interval: bar_interval for hour bars must be between 1 and 24/,
     );
   });
 });

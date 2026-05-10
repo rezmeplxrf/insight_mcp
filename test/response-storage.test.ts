@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { storeResponse, validateResponseStorage } from "../src/response-storage.js";
+import {
+  storeResponse,
+  validateResponseStorage,
+  validateResponseStorageTarget,
+} from "../src/response-storage.js";
 
 describe("response storage", () => {
   it("returns null when storage is not requested", async () => {
@@ -107,5 +111,21 @@ describe("response storage", () => {
         }),
       /csv storage is only supported for get_symbol_series/,
     );
+  });
+
+  it("cleans up the storage target probe file", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-store-probe-"));
+
+    try {
+      await validateResponseStorageTarget({
+        toolName: "search_symbols",
+        store: "json",
+        output_dir: outputDir,
+      });
+
+      assert.deepEqual(await readdir(outputDir), []);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
   });
 });

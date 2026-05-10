@@ -6,7 +6,14 @@ import { coerceArgs, getZodEnumValues, getZodTypeName, isOptionalZodType } from 
 import { type AuthStatus, getAuthStatus } from "./auth-status.js";
 import { deleteConfig, getConfigLocation, resolveApiKey, saveConfig } from "./config.js";
 import { downloadHistorySchema } from "./download-history-schema.js";
-import { type DownloadHistoryOptions, downloadHistory } from "./history.js";
+import {
+  type DownloadHistoryOptions,
+  downloadHistory,
+  validateOutputDirectory,
+} from "./history.js";
+import { validateHistoryIntervalArgs } from "./history-validation.js";
+import { type ResponseStoreFormat, validateResponseStorageTarget } from "./response-storage.js";
+import { shouldPromptSymbolScopedParam } from "./symbol-param-applicability.js";
 import { validateSymbolLikeArg } from "./symbol-validation.js";
 import { type ToolDefinition, toolDefinitions } from "./tool-definitions.js";
 import { runApiTool } from "./tool-runner.js";
@@ -15,13 +22,7 @@ export { coerceArgs } from "./arg-coercion.js";
 
 const DOWNLOAD_HISTORY_COMMAND = "download_history";
 const MAX_INTERACTIVE_PROMPT_ATTEMPTS = 3;
-const COMMON_TOOL_OPTION_SCHEMA: Record<string, z.ZodTypeAny> = {
-  filter: z.string().describe("JSONata expression to transform the response").optional(),
-  store: z
-    .enum(["none", "json", "csv"])
-    .default("none")
-    .describe("Store the response instead of printing it. Default is none.")
-    .optional(),
+const STORAGE_DESTINATION_SCHEMA: Record<"output_file" | "output_dir", z.ZodTypeAny> = {
   output_file: z.string().describe("File path for stored response.").optional(),
   output_dir: z
     .string()
@@ -142,6 +143,7 @@ export function buildDownloadHistoryHelp(): string {
     "  --extended                 boolean [optional] Pass through to the request.",
     "  --dadj                     boolean [optional] Pass through to the request.",
     "  --badj                     boolean [optional] Pass through to the request.",
+    "  --split                    boolean [optional] Pass through to the request. Default: true.",
     "  --settlement               boolean [optional] Pass through to the request.",
     "",
     "Examples:",
@@ -515,6 +517,7 @@ async function resolveToolArgs(
   if (io.isInteractive === true && io.prompt) {
     for (const [key, zodType] of Object.entries(tool.schema)) {
       if (resolved[key] !== undefined) continue;
+      if (isOptionalZodType(zodType) && !shouldPromptSymbolScopedParam(key, resolved)) continue;
       if (isOptionalZodType(zodType)) {
         const answer = await promptForOptionalToolArg(key, zodType, io);
         if (answer === null) return null;
@@ -525,7 +528,7 @@ async function resolveToolArgs(
         resolved[key] = answer;
       }
     }
-    await resolveCommonToolOptions(resolved, io);
+    await resolveStorageDestination(resolved, tool.name, io);
   } else if (missingToolArgs(resolved, tool).length > 0) {
     return null;
   }
@@ -535,34 +538,78 @@ async function resolveToolArgs(
   return resolved;
 }
 
-async function resolveCommonToolOptions(
+async function resolveStorageDestination(
   resolved: Record<string, string>,
+  toolName: string,
   io: CliIO,
 ): Promise<void> {
-  for (const key of ["filter", "store"] as const) {
-    if (resolved[key] !== undefined) continue;
-    const answer = await promptForOptionalToolArg(key, COMMON_TOOL_OPTION_SCHEMA[key], io);
-    if (answer !== null && answer !== undefined) resolved[key] = answer;
-  }
-
   if (!isStoreEnabled(resolved.store)) return;
 
   if (!resolved.output_file) {
-    const answer = await promptForOptionalToolArg(
+    const answer = await promptForOptionalStorageDestinationArg(
       "output_file",
-      COMMON_TOOL_OPTION_SCHEMA.output_file,
+      STORAGE_DESTINATION_SCHEMA.output_file,
+      resolved,
+      toolName,
       io,
     );
     if (answer !== null && answer !== undefined) resolved.output_file = answer;
   }
 
   if (!resolved.output_file && !resolved.output_dir) {
-    const answer = await promptForOptionalToolArg(
+    const answer = await promptForOptionalStorageDestinationArg(
       "output_dir",
-      COMMON_TOOL_OPTION_SCHEMA.output_dir,
+      STORAGE_DESTINATION_SCHEMA.output_dir,
+      resolved,
+      toolName,
       io,
     );
     if (answer !== null && answer !== undefined) resolved.output_dir = answer;
+  }
+}
+
+async function promptForOptionalStorageDestinationArg(
+  key: "output_file" | "output_dir",
+  zodType: z.ZodTypeAny,
+  resolved: Record<string, string>,
+  toolName: string,
+  io: CliIO,
+): Promise<string | undefined | null> {
+  const label = toolPromptLabel(key);
+  const question = optionalPromptQuestion(label, zodType);
+  for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
+    const answer = (await io.prompt?.(question))?.trim() ?? "";
+    if (!answer) return undefined;
+
+    const error = validateToolArgAnswer(key, zodType, answer);
+    if (error) {
+      io.write(`Invalid ${label}: ${error}\n`);
+      continue;
+    }
+
+    const storageError = await validateStorageDestinationAnswer(key, resolved, toolName, answer);
+    if (!storageError) return answer;
+    io.write(`Invalid ${label}: ${storageError}\n`);
+  }
+  return null;
+}
+
+async function validateStorageDestinationAnswer(
+  key: "output_file" | "output_dir",
+  resolved: Record<string, string>,
+  toolName: string,
+  answer: string,
+): Promise<string | null> {
+  try {
+    await validateResponseStorageTarget({
+      toolName,
+      store: resolved.store as ResponseStoreFormat | undefined,
+      output_file: key === "output_file" ? answer : undefined,
+      output_dir: key === "output_dir" ? answer : undefined,
+    });
+    return null;
+  } catch (error: any) {
+    return error?.message ?? String(error);
   }
 }
 
@@ -598,6 +645,7 @@ async function resolveDownloadHistoryArgs(
       if (!answer) return null;
       resolved[key] = answer;
     } else {
+      if (!shouldPromptSymbolScopedParam(key, resolved)) continue;
       const answer = await promptForOptionalDownloadHistoryArg(key, zodType, io);
       if (answer === null) return null;
       if (answer !== undefined) resolved[key] = answer;
@@ -663,6 +711,8 @@ function validateResolvedToolArgs(
     const error = validateToolArgAnswer(key, zodType, args[key]);
     if (error) return { key, error };
   }
+  const historyIntervalError = validateHistoryIntervalArgs(tool.name, args);
+  if (historyIntervalError) return historyIntervalError;
   return null;
 }
 
@@ -674,10 +724,29 @@ async function promptForDownloadHistoryArg(
   for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
     const answer = (await io.prompt?.(`${label}: `))?.trim() ?? "";
     const error = validateDownloadHistoryArgAnswer(key, answer);
-    if (!error) return answer;
-    io.write(`Invalid ${label}: ${error}\n`);
+    if (error) {
+      io.write(`Invalid ${label}: ${error}\n`);
+      continue;
+    }
+
+    const storageError = await validateDownloadHistoryStorageAnswer(key, answer);
+    if (!storageError) return answer;
+    io.write(`Invalid ${label}: ${storageError}\n`);
   }
   return null;
+}
+
+async function validateDownloadHistoryStorageAnswer(
+  key: RequiredDownloadHistoryArg,
+  answer: string,
+): Promise<string | null> {
+  if (key !== "output_dir") return null;
+  try {
+    await validateOutputDirectory(answer);
+    return null;
+  } catch (error: any) {
+    return error?.message ?? String(error);
+  }
 }
 
 function validateDownloadHistoryArgAnswer(key: string, answer: string): string | null {
@@ -722,6 +791,8 @@ function validateDownloadHistoryArgs(
     const error = validateDownloadHistoryArgAnswer(key, args[key]);
     if (error) return { key, error };
   }
+  const historyIntervalError = validateHistoryIntervalArgs(DOWNLOAD_HISTORY_COMMAND, args);
+  if (historyIntervalError) return historyIntervalError;
   return null;
 }
 
@@ -745,6 +816,8 @@ function downloadHistoryPromptLabel(key: string): string {
       return "Contract lookback months";
     case "bar_interval":
       return "Bar interval";
+    case "split":
+      return "Split";
     default:
       return toolPromptLabel(key);
   }
@@ -770,6 +843,7 @@ function parseDownloadHistoryArgs(args: Record<string, string>): DownloadHistory
     "extended",
     "dadj",
     "badj",
+    "split",
     "settlement",
   ] as const) {
     if (coerced[key] !== undefined) options[key] = coerced[key];
