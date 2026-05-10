@@ -993,7 +993,6 @@ describe("runCli", () => {
           prompt: async (question) => {
             questions.push(question);
             if (question.includes("Format")) return "json";
-            if (question.includes("Merge")) return "false";
             if (question.includes("Split")) return "false";
             if (question.includes("Extended")) return "true";
             return "";
@@ -1015,8 +1014,8 @@ describe("runCli", () => {
       assert.ok(parsed.files.every((file: string) => file.endsWith(".json")));
       assert.ok(questions.some((question) => question.includes("Format")));
       assert.ok(questions.some((question) => question.includes("Default: csv")));
-      assert.ok(questions.some((question) => question.includes("Merge")));
-      assert.ok(questions.some((question) => question.includes("Default: true")));
+      assert.ok(!questions.some((question) => question.includes("Merge")));
+      assert.ok(!questions.some((question) => question.includes("Keep chunks")));
       assert.ok(questions.some((question) => question.includes("Split")));
       assert.ok(questions.some((question) => question.includes("Extended")));
       assert.ok(!questions.some((question) => question.includes("Dadj")));

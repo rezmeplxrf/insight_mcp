@@ -645,6 +645,7 @@ async function resolveDownloadHistoryArgs(
       if (!answer) return null;
       resolved[key] = answer;
     } else {
+      if (!shouldPromptDownloadHistoryParam(key, resolved)) continue;
       if (!shouldPromptSymbolScopedParam(key, resolved)) continue;
       const answer = await promptForOptionalDownloadHistoryArg(key, zodType, io);
       if (answer === null) return null;
@@ -653,6 +654,18 @@ async function resolveDownloadHistoryArgs(
   }
 
   return missingDownloadHistoryArgs(resolved).length === 0 ? resolved : null;
+}
+
+function shouldPromptDownloadHistoryParam(
+  key: string,
+  args: Record<string, string | undefined>,
+): boolean {
+  if (key !== "merge" && key !== "keep_chunks") return true;
+  const format = args.format ?? "csv";
+  const writesCsv = format === "csv" || format === "both";
+  if (!writesCsv) return false;
+  if (key === "keep_chunks" && args.merge?.toLowerCase() === "false") return false;
+  return true;
 }
 
 async function promptForToolArg(
