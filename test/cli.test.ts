@@ -234,6 +234,15 @@ describe("runCli", () => {
     assert.equal(exitCode, 0);
   });
 
+  it("shows package version with --version", async () => {
+    const packageJson = JSON.parse(await readFile("package.json", "utf8"));
+
+    await runCli(["--version"], { write, exit });
+
+    assert.equal(output, `@insightsentry/mcp ${packageJson.version}`);
+    assert.equal(exitCode, 0);
+  });
+
   it("prompts for a tool when run interactively without arguments", async () => {
     const selectedToolIndex =
       toolDefinitions.findIndex((tool) => tool.name === "get_fundamentals_meta") + 1;
@@ -354,6 +363,60 @@ describe("runCli", () => {
     assert.equal(exitCode, 0);
   });
 
+  it("shows render_chart help", async () => {
+    await runCli(["render_chart", "--help"], { write, exit });
+    assert.ok(output.includes("Chart.js"));
+    assert.ok(output.includes("--config"));
+    assert.equal(exitCode, 0);
+  });
+
+  it("renders a chart from the CLI without API authentication", async () => {
+    let rendered:
+      | {
+          config: Record<string, unknown>;
+          width: number | undefined;
+          height: number | undefined;
+        }
+      | undefined;
+    const config = {
+      type: "line",
+      data: {
+        labels: ["Jan"],
+        datasets: [{ label: "Close", data: [100] }],
+      },
+    };
+
+    await runCli(
+      [
+        "render_chart",
+        "--config",
+        JSON.stringify(config),
+        "--width",
+        "320",
+        "--height",
+        "240",
+        "--unknown",
+        "ignored",
+      ],
+      {
+        write,
+        exit,
+        progress: () => {},
+        renderChart: async (chartConfig, width, height) => {
+          rendered = { config: chartConfig as Record<string, unknown>, width, height };
+          return { base64: "png-base64", filePath: "/tmp/chart.png" };
+        },
+      },
+    );
+
+    assert.deepEqual(rendered, { config, width: 320, height: 240 });
+    assert.deepEqual(JSON.parse(output), {
+      file: "/tmp/chart.png",
+      mime_type: "image/png",
+    });
+    assert.equal(exitCode, undefined);
+  });
+
   it("errors on unknown tool", async () => {
     await runCli(["nonexistent_tool"], { write, exit });
     assert.ok(output.includes("Unknown tool"));
@@ -371,6 +434,28 @@ describe("runCli", () => {
     } finally {
       if (origKey) process.env.INSIGHTSENTRY_API_KEY = origKey;
     }
+  });
+
+  it("reports used and disregarded args before running API tools", async () => {
+    const events: string[] = [];
+
+    await runCli(["search_symbols", "--query", "apple", "--type", "stock", "--bogus", "ignored"], {
+      write,
+      exit,
+      progress: (message) => events.push(message),
+      request: async (_method, _path, params) => {
+        events.push("request");
+        assert.deepEqual(params, { query: "apple", type: "stock" });
+        return { symbols: [] };
+      },
+    });
+
+    assert.deepEqual(events, [
+      "Using args: query=apple, type=stock",
+      "Disregarding args: --bogus=ignored",
+      "request",
+    ]);
+    assert.deepEqual(JSON.parse(output), { symbols: [] });
   });
 
   it("login without key shows usage when non-interactive", async () => {

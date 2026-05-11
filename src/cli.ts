@@ -1,12 +1,15 @@
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { stdin as input, stdout as output } from "node:process";
 import { emitKeypressEvents } from "node:readline";
 import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
+import type { ChartConfiguration } from "chart.js";
 import { z } from "zod";
 import { ApiClient } from "./api-client.js";
 import { coerceArgs, getZodEnumValues, getZodTypeName, isOptionalZodType } from "./arg-coercion.js";
 import { type AuthStatus, getAuthStatus, validateApiKeyForLogin } from "./auth-status.js";
+import { renderChart } from "./chart.js";
 import { deleteConfig, getConfigLocation, resolveApiKey, saveConfig } from "./config.js";
 import { downloadHistorySchema } from "./download-history-schema.js";
 import {
@@ -28,9 +31,13 @@ import { runApiTool, validateFilterExpression } from "./tool-runner.js";
 export { coerceArgs } from "./arg-coercion.js";
 
 const DOWNLOAD_HISTORY_COMMAND = "download_history";
+const RENDER_CHART_COMMAND = "render_chart";
 const UPDATE_COMMAND = "update";
 const MAX_INTERACTIVE_PROMPT_ATTEMPTS = 3;
 const execFileAsync = promisify(execFile);
+const PACKAGE_JSON = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+) as { name: string; version: string };
 const STORAGE_DESTINATION_SCHEMA: Record<"output_file" | "output_dir", z.ZodTypeAny> = {
   output_file: z.string().describe("File path for stored response.").optional(),
   output_dir: z
@@ -54,17 +61,40 @@ const FILTER_SCHEMA = z
   .string()
   .optional()
   .describe("JSONata expression to transform the response. Leave empty for no filter.");
+const RENDER_CHART_SCHEMA: Record<"config" | "width" | "height", z.ZodTypeAny> = {
+  config: z
+    .string()
+    .describe('Chart.js configuration as JSON. Must include "type" and "data" fields.'),
+  width: z
+    .number()
+    .int()
+    .min(200)
+    .max(2000)
+    .default(800)
+    .optional()
+    .describe("Chart width in pixels. Default: 800."),
+  height: z
+    .number()
+    .int()
+    .min(200)
+    .max(2000)
+    .default(400)
+    .optional()
+    .describe("Chart height in pixels. Default: 400."),
+};
 
 interface ParsedArgs {
   toolName: string | null;
   args: Record<string, string>;
   help: boolean;
+  version: boolean;
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const args: Record<string, string> = {};
   let toolName: string | null = null;
   let help = false;
+  let version = false;
 
   let i = 0;
 
@@ -78,6 +108,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
     const arg = argv[i];
     if (arg === "--help" || arg === "-h") {
       help = true;
+      i++;
+      continue;
+    }
+    if (arg === "--version" || arg === "-v") {
+      version = true;
       i++;
       continue;
     }
@@ -96,7 +131,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  return { toolName, args, help };
+  return { toolName, args, help, version };
+}
+
+export function buildVersion(): string {
+  return `${PACKAGE_JSON.name} ${PACKAGE_JSON.version}`;
 }
 
 export function buildHelp(): string {
@@ -115,6 +154,7 @@ export function buildHelp(): string {
   lines.push(
     `  ${DOWNLOAD_HISTORY_COMMAND.padEnd(32)} Download historical ranges to JSON/CSV files with concurrency and progress`,
   );
+  lines.push(`  ${RENDER_CHART_COMMAND.padEnd(32)} Render Chart.js configs as PNG images`);
 
   lines.push("");
   lines.push("Quick Start:");
@@ -176,6 +216,23 @@ export function buildDownloadHistoryHelp(): string {
     '  insight download_history --symbol "NASDAQ:AAPL" --bar_type minute --from 2024-01 --to 2024-06 --output_dir ./history --format csv --merge',
     '  insight download_history --symbol "NASDAQ:AAPL" --bar_type second --from 2024-06-01 --to 2024-06-14 --output_dir ./history --concurrency 5',
     '  insight download_history --symbol "CME_MINI:NQ1!" --bar_type hour --from 2025-01 --to 2025-12 --output_dir ./futures --format both',
+  ].join("\n");
+}
+
+export function buildRenderChartHelp(): string {
+  return [
+    `insight ${RENDER_CHART_COMMAND}`,
+    "",
+    "Render a Chart.js chart configuration to a local PNG file.",
+    "",
+    "Parameters:",
+    '  --config                   string   Required. Chart.js configuration JSON with "type" and "data" fields.',
+    "  --width                    number [optional] Chart width in pixels, 200-2000. Default: 800.",
+    "  --height                   number [optional] Chart height in pixels, 200-2000. Default: 400.",
+    "",
+    "Examples:",
+    '  insight render_chart --config \'{"type":"line","data":{"labels":["Jan","Feb"],"datasets":[{"label":"Price","data":[100,105]}]}}\'',
+    '  insight render_chart --config \'{"type":"bar","data":{"labels":["Jan"],"datasets":[{"label":"Volume","data":[1200]}]}}\' --width 1200 --height 600',
   ].join("\n");
 }
 
@@ -347,6 +404,11 @@ type RunCommandFn = (
   command: string,
   args: string[],
 ) => Promise<{ stdout?: string; stderr?: string }>;
+type RenderChartFn = (
+  config: ChartConfiguration,
+  width?: number,
+  height?: number,
+) => Promise<{ base64: string; filePath: string }>;
 
 interface CliIO {
   write: (s: string) => void;
@@ -354,6 +416,7 @@ interface CliIO {
   request?: RequestFn;
   createRequestFromApiKey?: (apiKey: string) => RequestFn;
   runCommand?: RunCommandFn;
+  renderChart?: RenderChartFn;
   progress?: (s: string) => void;
   prompt?: (question: string) => Promise<string>;
   selectTool?: (options: ToolSelectionOption[]) => Promise<string | null>;
@@ -375,8 +438,14 @@ interface InteractiveToolResolution {
 }
 
 export async function runCli(argv: string[], io: CliIO): Promise<void> {
-  let { toolName, args, help } = parseArgs(argv);
+  let { toolName, args, help, version } = parseArgs(argv);
   let sessionApiKey: string | undefined;
+
+  if (version) {
+    io.write(buildVersion());
+    io.exit(0);
+    return;
+  }
 
   if (!toolName) {
     if (!help && io.isInteractive === true && io.prompt) {
@@ -495,6 +564,7 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
         io.exit(1);
         return;
       }
+      reportArgUsage(io, historyArgs, Object.keys(downloadHistorySchema), inputArgs);
       const result = await downloadHistory(parseDownloadHistoryArgs(historyArgs), {
         request,
         onProgress: (event) => {
@@ -506,6 +576,69 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
         },
       });
       io.write(JSON.stringify(result, null, 2));
+    } catch (error: any) {
+      io.write(`Error: ${error.message}\n`);
+      io.exit(1);
+    }
+    return;
+  }
+
+  if (toolName === RENDER_CHART_COMMAND) {
+    if (help) {
+      io.write(buildRenderChartHelp());
+      io.exit(0);
+      return;
+    }
+
+    const inputArgs = { ...args };
+    const interactive = io.isInteractive === true && Boolean(io.prompt);
+    if (interactive) {
+      for (const error of collectInvalidRenderChartArgs(inputArgs)) {
+        io.write(`Invalid ${toolPromptLabel(error.key)}: ${error.error}\n`);
+        delete inputArgs[error.key];
+      }
+    } else {
+      const providedValidationError = validateRenderChartArgs(inputArgs);
+      if (providedValidationError) {
+        io.write(
+          `Invalid ${toolPromptLabel(providedValidationError.key)}: ${providedValidationError.error}\n`,
+        );
+        io.exit(1);
+        return;
+      }
+    }
+
+    const resolvedArgs = await resolveRenderChartArgs(inputArgs, io);
+    if (!resolvedArgs) {
+      io.write(
+        `Error: Missing required options for ${RENDER_CHART_COMMAND}: config\n\nRun: insight ${RENDER_CHART_COMMAND} --help`,
+      );
+      io.exit(1);
+      return;
+    }
+
+    const validationError = validateRenderChartArgs(resolvedArgs);
+    if (validationError) {
+      io.write(`Invalid ${toolPromptLabel(validationError.key)}: ${validationError.error}\n`);
+      io.exit(1);
+      return;
+    }
+
+    try {
+      const { config, width, height } = parseRenderChartArgs(resolvedArgs);
+      reportArgUsage(io, resolvedArgs, Object.keys(RENDER_CHART_SCHEMA), inputArgs);
+      const renderer = io.renderChart ?? renderChart;
+      const result = await renderer(config, width, height);
+      io.write(
+        JSON.stringify(
+          {
+            file: result.filePath,
+            mime_type: "image/png",
+          },
+          null,
+          2,
+        ),
+      );
     } catch (error: any) {
       io.write(`Error: ${error.message}\n`);
       io.exit(1);
@@ -599,11 +732,14 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
   }
 
   try {
+    const knownArgKeys = ["filter", "store", "output_file", "output_dir"];
+    const apiArgs = pickKnownArgs(resolvedArgs, Object.keys(tool.schema), knownArgKeys);
+    reportArgUsage(io, apiArgs, Object.keys(tool.schema), inputArgs, knownArgKeys);
     const outputValue = await runApiTool({
       toolName: tool.name,
       method: tool.method,
       pathTemplate: tool.pathTemplate,
-      args: coerceArgs(resolvedArgs, tool.schema),
+      args: coerceArgs(apiArgs, tool.schema),
       request,
     });
     const output =
@@ -682,6 +818,10 @@ function interactiveToolOptions(): ToolSelectionOption[] {
       name: DOWNLOAD_HISTORY_COMMAND,
       description: "Download historical ranges to JSON/CSV files",
     },
+    {
+      name: RENDER_CHART_COMMAND,
+      description: "Render Chart.js configs as PNG images",
+    },
   ];
 }
 
@@ -736,6 +876,43 @@ function resolveRequest(io: CliIO, apiKeyOverride?: string): RequestFn | null {
   if (io.createRequestFromApiKey) return io.createRequestFromApiKey(apiKey);
   const client = new ApiClient(apiKey);
   return (method, path, params) => client.request(method, path, params);
+}
+
+function reportArgUsage(
+  io: CliIO,
+  resolvedArgs: Record<string, string>,
+  knownKeys: string[],
+  originalArgs: Record<string, string>,
+  extraKnownKeys: string[] = [],
+): void {
+  if (!io.progress) return;
+
+  const known = new Set([...knownKeys, ...extraKnownKeys]);
+  const used = Object.entries(resolvedArgs)
+    .filter(([key, value]) => known.has(key) && hasArgValue(value))
+    .map(([key, value]) => `${key}=${formatArgValue(value)}`);
+  const disregarded = Object.entries(originalArgs)
+    .filter(([key]) => !known.has(key))
+    .map(([key, value]) => `--${key}=${formatArgValue(value)}`);
+
+  io.progress(`Using args: ${used.length ? used.join(", ") : "(none)"}`);
+  if (disregarded.length > 0) {
+    io.progress(`Disregarding args: ${disregarded.join(", ")}`);
+  }
+}
+
+function pickKnownArgs(
+  args: Record<string, string>,
+  knownKeys: string[],
+  extraKnownKeys: string[] = [],
+): Record<string, string> {
+  const known = new Set([...knownKeys, ...extraKnownKeys]);
+  return Object.fromEntries(Object.entries(args).filter(([key]) => known.has(key)));
+}
+
+function formatArgValue(value: string): string {
+  const singleLine = value.replace(/\s+/g, " ").trim();
+  return singleLine.length <= 120 ? singleLine : `${singleLine.slice(0, 117)}...`;
 }
 
 function missingToolArgs(args: Record<string, string>, tool: ToolDefinition): string[] {
@@ -1150,6 +1327,125 @@ function validateStoreMode(toolName: string, store: string | undefined): string 
     return "csv storage is only supported for get_symbol_series and get_symbol_history";
   }
   return null;
+}
+
+async function resolveRenderChartArgs(
+  args: Record<string, string>,
+  io: CliIO,
+): Promise<Record<string, string> | null> {
+  if (io.isInteractive !== true || !io.prompt) {
+    return hasArgValue(args.config) ? args : null;
+  }
+
+  const resolved = { ...args };
+  for (const [key, zodType] of Object.entries(RENDER_CHART_SCHEMA)) {
+    if (resolved[key] !== undefined) continue;
+    if (key === "config") {
+      const answer = await promptForRenderChartArg(key, zodType, io);
+      if (!answer) return null;
+      resolved[key] = answer;
+    } else {
+      const answer = await promptForOptionalRenderChartArg(key, zodType, io);
+      if (answer === null) return null;
+      if (answer !== undefined) resolved[key] = answer;
+    }
+  }
+
+  return hasArgValue(resolved.config) ? resolved : null;
+}
+
+async function promptForRenderChartArg(
+  key: string,
+  zodType: z.ZodTypeAny,
+  io: CliIO,
+): Promise<string | null> {
+  const label = toolPromptLabel(key);
+  const question = promptQuestion(label, zodType, "required");
+  for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
+    const answer = (await io.prompt?.(question))?.trim() ?? "";
+    const error = validateRenderChartArgAnswer(key, zodType, answer);
+    if (!error) return answer;
+    io.write(`Invalid ${label}: ${error}\n`);
+  }
+  return null;
+}
+
+async function promptForOptionalRenderChartArg(
+  key: string,
+  zodType: z.ZodTypeAny,
+  io: CliIO,
+): Promise<string | undefined | null> {
+  const label = toolPromptLabel(key);
+  const question = optionalPromptQuestion(label, zodType);
+  for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
+    const answer = (await io.prompt?.(question))?.trim() ?? "";
+    if (!answer) return undefined;
+    const error = validateRenderChartArgAnswer(key, zodType, answer);
+    if (!error) return answer;
+    io.write(`Invalid ${label}: ${error}\n`);
+  }
+  return null;
+}
+
+function validateRenderChartArgs(
+  args: Record<string, string>,
+): { key: string; error: string } | null {
+  for (const [key, zodType] of Object.entries(RENDER_CHART_SCHEMA)) {
+    if (args[key] === undefined) continue;
+    const error = validateRenderChartArgAnswer(key, zodType, args[key]);
+    if (error) return { key, error };
+  }
+  return null;
+}
+
+function collectInvalidRenderChartArgs(
+  args: Record<string, string>,
+): Array<{ key: string; error: string }> {
+  const errors: Array<{ key: string; error: string }> = [];
+  for (const [key, zodType] of Object.entries(RENDER_CHART_SCHEMA)) {
+    if (args[key] === undefined) continue;
+    const error = validateRenderChartArgAnswer(key, zodType, args[key]);
+    if (error) errors.push({ key, error });
+  }
+  return errors;
+}
+
+function validateRenderChartArgAnswer(
+  key: string,
+  zodType: z.ZodTypeAny,
+  answer: string,
+): string | null {
+  if (!answer) return "value is required";
+
+  const coerced = coerceArgs({ [key]: answer }, { [key]: zodType })[key];
+  const parsed = zodType.safeParse(coerced);
+  if (!parsed.success) {
+    return parsed.error.issues.map((issue) => issue.message).join("; ");
+  }
+
+  if (key !== "config") return null;
+  try {
+    const config = JSON.parse(answer);
+    if (!config || typeof config !== "object" || !config.type || !config.data) {
+      return 'Chart config must include "type" and "data" fields';
+    }
+    return null;
+  } catch (error: any) {
+    return `config must be valid JSON: ${error?.message ?? String(error)}`;
+  }
+}
+
+function parseRenderChartArgs(args: Record<string, string>): {
+  config: ChartConfiguration;
+  width?: number;
+  height?: number;
+} {
+  const coerced = coerceArgs(args, RENDER_CHART_SCHEMA);
+  return {
+    config: JSON.parse(coerced.config) as ChartConfiguration,
+    width: coerced.width,
+    height: coerced.height,
+  };
 }
 
 async function promptForDownloadHistoryArg(
