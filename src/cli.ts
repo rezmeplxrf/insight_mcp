@@ -6,7 +6,7 @@ import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import type { ChartConfiguration } from "chart.js";
 import { z } from "zod";
-import { ApiClient } from "./api-client.js";
+import { ApiClient, validateApiPlanEntitlements } from "./api-client.js";
 import { coerceArgs, getZodEnumValues, getZodTypeName, isOptionalZodType } from "./arg-coercion.js";
 import { type AuthStatus, getAuthStatus, validateApiKeyForLogin } from "./auth-status.js";
 import { renderChart } from "./chart.js";
@@ -733,7 +733,12 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
 
   try {
     const knownArgKeys = ["filter", "store", "output_file", "output_dir"];
-    const apiArgs = pickKnownArgs(resolvedArgs, Object.keys(tool.schema), knownArgKeys);
+    const initialApiArgs = pickKnownArgs(resolvedArgs, Object.keys(tool.schema), knownArgKeys);
+    const apiArgs = await resolveApiPlanEntitlementArgs(initialApiArgs, tool, sessionApiKey, io);
+    if (!apiArgs) {
+      io.exit(1);
+      return;
+    }
     reportArgUsage(io, apiArgs, Object.keys(tool.schema), inputArgs, knownArgKeys);
     const outputValue = await runApiTool({
       toolName: tool.name,
@@ -913,6 +918,69 @@ function pickKnownArgs(
 function formatArgValue(value: string): string {
   const singleLine = value.replace(/\s+/g, " ").trim();
   return singleLine.length <= 120 ? singleLine : `${singleLine.slice(0, 117)}...`;
+}
+
+async function resolveApiPlanEntitlementArgs(
+  args: Record<string, string>,
+  tool: ToolDefinition,
+  apiKeyOverride: string | undefined,
+  io: CliIO,
+): Promise<Record<string, string> | null> {
+  const apiKey = apiKeyOverride?.trim() || resolveApiKey();
+  if (!apiKey) return args;
+
+  const error = validateApiPlanEntitlements(
+    apiKey,
+    tool.pathTemplate,
+    coerceArgs(args, tool.schema),
+  );
+  if (!error) return args;
+
+  const label = toolPromptLabel(error.key);
+  if (io.isInteractive === true && io.prompt && tool.schema[error.key]) {
+    io.write(`Invalid ${label}: ${error.error}\n`);
+    const answer = await promptForPlanEntitledToolArg(
+      error.key,
+      tool.schema[error.key],
+      args,
+      tool,
+      apiKey,
+      io,
+    );
+    if (answer === null) return null;
+    return { ...args, [error.key]: answer };
+  }
+
+  io.write(`Invalid ${label}: ${error.error}\n`);
+  return null;
+}
+
+async function promptForPlanEntitledToolArg(
+  key: string,
+  zodType: z.ZodTypeAny,
+  resolved: Record<string, string>,
+  tool: ToolDefinition,
+  apiKey: string,
+  io: CliIO,
+): Promise<string | null> {
+  const label = toolPromptLabel(key);
+  const question = promptQuestion(label, zodType, "required");
+  for (let attempt = 0; attempt < MAX_INTERACTIVE_PROMPT_ATTEMPTS; attempt++) {
+    const answer = (await io.prompt?.(question))?.trim() ?? "";
+    const answerError = validateToolArgAnswer(key, zodType, answer);
+    if (answerError) {
+      io.write(`Invalid ${label}: ${answerError}\n`);
+      continue;
+    }
+
+    const planError = validateApiPlanEntitlements(apiKey, tool.pathTemplate, {
+      ...coerceArgs(resolved, tool.schema),
+      ...coerceArgs({ [key]: answer }, { [key]: zodType }),
+    });
+    if (!planError) return answer;
+    io.write(`Invalid ${label}: ${planError.error}\n`);
+  }
+  return null;
 }
 
 function missingToolArgs(args: Record<string, string>, tool: ToolDefinition): string[] {

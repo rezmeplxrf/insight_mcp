@@ -1,5 +1,6 @@
 const BASE_URL = "https://api.insightsentry.com";
 const HISTORY_PLAN_NAMES = new Set(["ultra", "mega", "enterprise"]);
+const TICK_SERIES_PLAN_NAMES = new Set(["mega", "enterprise"]);
 const DEFAULT_RETRY_DELAYS_MS = [500, 1000] as const;
 const HISTORY_RATE_LIMIT_RETRY_DELAY_MS = 60_000;
 
@@ -35,6 +36,11 @@ export interface ApiClientOptions {
   sleep?: (delayMs: number) => Promise<void>;
 }
 
+export interface ApiPlanEntitlementError {
+  key: string;
+  error: string;
+}
+
 function validateSymbolParams(params: Record<string, any>): string | null {
   for (const [key, value] of Object.entries(params)) {
     if (!SYMBOL_PARAM_NAMES.has(key) || !value) continue;
@@ -57,6 +63,10 @@ function isHistoryEndpoint(pathTemplate: string): boolean {
   return /\/history(?:[/?#]|$)/.test(pathTemplate);
 }
 
+function isSeriesEndpoint(pathTemplate: string): boolean {
+  return /\/series(?:[/?#]|$)/.test(pathTemplate);
+}
+
 function decodeJwtPayload(token: string): Record<string, any> | null {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
@@ -69,16 +79,36 @@ function decodeJwtPayload(token: string): Record<string, any> | null {
   }
 }
 
-function validateHistoryPlan(apiKey: string, pathTemplate: string): void {
-  if (!isHistoryEndpoint(pathTemplate)) return;
+export function validateApiPlanEntitlements(
+  apiKey: string,
+  pathTemplate: string,
+  params: Record<string, any>,
+): ApiPlanEntitlementError | null {
+  if (isHistoryEndpoint(pathTemplate)) {
+    const payload = decodeJwtPayload(apiKey);
+    const plan = typeof payload?.plan === "string" ? payload.plan.trim().toLowerCase() : "";
+    if (HISTORY_PLAN_NAMES.has(plan)) return null;
+
+    return {
+      key: "plan",
+      error:
+        "The /history endpoint requires an Ultra, Mega, or Enterprise plan. Use get_symbol_series for recent data or upgrade your InsightSentry plan for deep historical access.",
+    };
+  }
+
+  if (!isSeriesEndpoint(pathTemplate)) return null;
+  const barType = typeof params.bar_type === "string" ? params.bar_type.trim().toLowerCase() : "";
+  if (barType !== "tick") return null;
 
   const payload = decodeJwtPayload(apiKey);
   const plan = typeof payload?.plan === "string" ? payload.plan.trim().toLowerCase() : "";
-  if (HISTORY_PLAN_NAMES.has(plan)) return;
+  if (TICK_SERIES_PLAN_NAMES.has(plan)) return null;
 
-  throw new Error(
-    "The /history endpoint requires an Ultra, Mega, or Enterprise plan. Use get_symbol_series for recent data or upgrade your InsightSentry plan for deep historical access.",
-  );
+  return {
+    key: "bar_type",
+    error:
+      "The /series tick option requires a Mega or Enterprise plan. Use another get_symbol_series bar_type or upgrade your InsightSentry plan for tick data access.",
+  };
 }
 
 export function isTerminalApiError(error: unknown): boolean {
@@ -125,7 +155,8 @@ export class ApiClient {
     if (symbolError) {
       throw new Error(symbolError);
     }
-    validateHistoryPlan(this.apiKey, pathTemplate);
+    const planError = validateApiPlanEntitlements(this.apiKey, pathTemplate, params);
+    if (planError) throw new Error(planError.error);
 
     // Separate path params from query/body params
     const pathParamNames = [...pathTemplate.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);

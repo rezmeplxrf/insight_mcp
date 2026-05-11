@@ -1141,6 +1141,76 @@ describe("runCli", () => {
     assert.equal(exitCode, 1);
   });
 
+  it("reprompts interactive tick series when the plan is below mega", async () => {
+    const origKey = process.env.INSIGHTSENTRY_API_KEY;
+    process.env.INSIGHTSENTRY_API_KEY = jwt({ uuid: "user@example.com", plan: "ultra" });
+    try {
+      const questions: string[] = [];
+      let requestedParams: Record<string, any> | undefined;
+
+      await runCli(
+        ["get_symbol_series", "--symbol", "NASDAQ:AAPL", "--bar_type", "tick", "--dp", "1"],
+        {
+          write,
+          exit,
+          isInteractive: true,
+          prompt: async (question) => {
+            questions.push(question);
+            if (question.startsWith("Bar Type")) return "day";
+            return "";
+          },
+          request: async (_method, _path, params) => {
+            requestedParams = params;
+            return { ok: true };
+          },
+        },
+      );
+
+      assert.ok(output.includes("Invalid Bar Type"));
+      assert.ok(output.includes("Mega or Enterprise plan"));
+      assert.ok(questions.some((question) => question.startsWith("Bar Type")));
+      assert.equal(requestedParams?.bar_type, "day");
+      assert.equal(exitCode, undefined);
+    } finally {
+      if (origKey === undefined) {
+        delete process.env.INSIGHTSENTRY_API_KEY;
+      } else {
+        process.env.INSIGHTSENTRY_API_KEY = origKey;
+      }
+    }
+  });
+
+  it("rejects non-interactive tick series before request when the plan is below mega", async () => {
+    const origKey = process.env.INSIGHTSENTRY_API_KEY;
+    process.env.INSIGHTSENTRY_API_KEY = jwt({ uuid: "user@example.com", plan: "ultra" });
+    try {
+      let called = false;
+
+      await runCli(
+        ["get_symbol_series", "--symbol", "NASDAQ:AAPL", "--bar_type", "tick", "--dp", "1"],
+        {
+          write,
+          exit,
+          request: async () => {
+            called = true;
+            return { ok: true };
+          },
+        },
+      );
+
+      assert.ok(output.includes("Invalid Bar Type"));
+      assert.ok(output.includes("Mega or Enterprise plan"));
+      assert.equal(called, false);
+      assert.equal(exitCode, 1);
+    } finally {
+      if (origKey === undefined) {
+        delete process.env.INSIGHTSENTRY_API_KEY;
+      } else {
+        process.env.INSIGHTSENTRY_API_KEY = origKey;
+      }
+    }
+  });
+
   it("allows screener max_range values that the API gateway clamps", async () => {
     const calls: Record<string, any>[] = [];
 
