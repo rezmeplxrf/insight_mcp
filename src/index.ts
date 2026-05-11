@@ -5,13 +5,20 @@ import { ApiClient } from "./api-client.js";
 import { flexibleInputSchema } from "./arg-coercion.js";
 import { getAuthStatus, getWhoami } from "./auth-status.js";
 import { renderChart } from "./chart.js";
-import { resolveApiKeyWithSource } from "./config.js";
+import { getVersionCacheLocation, resolveApiKeyWithSource } from "./config.js";
 import { downloadHistorySchema } from "./download-history-schema.js";
 import { downloadHistory } from "./history.js";
+import { PACKAGE_JSON } from "./package-info.js";
 import { docResources, fetchDocResourceContent } from "./resources.js";
 import { validateSymbolLikeArgs } from "./symbol-validation.js";
 import { toolDefinitions } from "./tool-definitions.js";
 import { runApiTool } from "./tool-runner.js";
+import {
+  fetchLatestPackageVersion,
+  formatUpgradeNotice,
+  formatVersionStatus,
+  getVersionStatus,
+} from "./version-status.js";
 
 const INSTRUCTIONS = `You are connected to the InsightSentry financial data API. You have access to real-time and historical market data for equities, futures, options, crypto, forex, and more.
 
@@ -201,7 +208,7 @@ if (!apiKey) {
 }
 
 const server = new McpServer(
-  { name: "insightsentry", version: "1.0.0" },
+  { name: "insightsentry", version: PACKAGE_JSON.version },
   { instructions: INSTRUCTIONS },
 );
 
@@ -224,6 +231,22 @@ server.registerTool(
     const identity = result.identity;
     return {
       content: [{ type: "text" as const, text: identity }],
+    };
+  },
+);
+
+server.registerTool(
+  "version_status",
+  {
+    description:
+      "Check the installed InsightSentry CLI/MCP package version against the latest npm version and show the upgrade command when one is available.",
+    inputSchema: {},
+  },
+  async () => {
+    const status = await getCachedVersionStatus();
+    return {
+      content: [{ type: "text" as const, text: formatVersionStatus(status) }],
+      isError: status.latestVersion ? undefined : true,
     };
   },
 );
@@ -278,7 +301,7 @@ for (const tool of toolDefinitions) {
 
         const content = typeof output === "string" ? output : JSON.stringify(output, null, 2);
         return {
-          content: [{ type: "text" as const, text: content }],
+          content: await withUpgradeNotice([{ type: "text" as const, text: content }]),
         };
       } catch (error: any) {
         return {
@@ -327,12 +350,12 @@ server.registerTool(
         },
       });
       return {
-        content: [
+        content: await withUpgradeNotice([
           {
             type: "text" as const,
             text: JSON.stringify({ ...result, progress }, null, 2),
           },
-        ],
+        ]),
       };
     } catch (error: any) {
       return {
@@ -389,7 +412,7 @@ server.registerTool(
       }
       const { base64, filePath } = await renderChart(config, args.width, args.height);
       return {
-        content: [
+        content: await withUpgradeNotice([
           {
             type: "image" as const,
             data: base64,
@@ -399,7 +422,7 @@ server.registerTool(
             type: "text" as const,
             text: `Chart saved to: ${filePath}`,
           },
-        ],
+        ]),
       };
     } catch (error: any) {
       return {
@@ -432,6 +455,23 @@ for (const doc of docResources) {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+}
+
+type ToolContent =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
+async function withUpgradeNotice(content: ToolContent[]): Promise<ToolContent[]> {
+  const status = await getCachedVersionStatus();
+  const notice = formatUpgradeNotice(status);
+  if (notice) content.push({ type: "text", text: notice });
+  return content;
+}
+
+async function getCachedVersionStatus() {
+  return getVersionStatus(PACKAGE_JSON, fetchLatestPackageVersion, {
+    cachePath: getVersionCacheLocation(),
+  });
 }
 
 main().catch((error) => {

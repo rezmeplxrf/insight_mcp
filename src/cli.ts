@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { stdin as input, stdout as output } from "node:process";
 import { emitKeypressEvents } from "node:readline";
 import { createInterface } from "node:readline/promises";
@@ -10,7 +9,13 @@ import { ApiClient, validateApiPlanEntitlements } from "./api-client.js";
 import { coerceArgs, getZodEnumValues, getZodTypeName, isOptionalZodType } from "./arg-coercion.js";
 import { type AuthStatus, getAuthStatus, validateApiKeyForLogin } from "./auth-status.js";
 import { renderChart } from "./chart.js";
-import { deleteConfig, getConfigLocation, resolveApiKey, saveConfig } from "./config.js";
+import {
+  deleteConfig,
+  getConfigLocation,
+  getVersionCacheLocation,
+  resolveApiKey,
+  saveConfig,
+} from "./config.js";
 import { downloadHistorySchema } from "./download-history-schema.js";
 import {
   type DownloadHistoryOptions,
@@ -18,6 +23,7 @@ import {
   validateOutputDirectory,
 } from "./history.js";
 import { validateHistoryIntervalArgs } from "./history-validation.js";
+import { PACKAGE_JSON } from "./package-info.js";
 import {
   type ResponseStoreFormat,
   supportsCsvStorage,
@@ -27,17 +33,22 @@ import { analyzeSymbolCodes, shouldPromptSymbolScopedParam } from "./symbol-para
 import { validateSymbolLikeArg } from "./symbol-validation.js";
 import { type ToolDefinition, toolDefinitions } from "./tool-definitions.js";
 import { runApiTool, validateFilterExpression } from "./tool-runner.js";
+import {
+  fetchLatestPackageVersion,
+  formatUpgradeNotice,
+  formatVersionStatus,
+  getVersionStatus,
+  type LatestVersionProvider,
+} from "./version-status.js";
 
 export { coerceArgs } from "./arg-coercion.js";
 
 const DOWNLOAD_HISTORY_COMMAND = "download_history";
 const RENDER_CHART_COMMAND = "render_chart";
 const UPDATE_COMMAND = "update";
+const VERSION_COMMAND = "version";
 const MAX_INTERACTIVE_PROMPT_ATTEMPTS = 3;
 const execFileAsync = promisify(execFile);
-const PACKAGE_JSON = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-) as { name: string; version: string };
 const STORAGE_DESTINATION_SCHEMA: Record<"output_file" | "output_dir", z.ZodTypeAny> = {
   output_file: z.string().describe("File path for stored response.").optional(),
   output_dir: z
@@ -176,6 +187,7 @@ export function buildHelp(): string {
   lines.push("Authentication:");
   lines.push("  insight login --key <your-api-key>    Save API key (persisted across sessions)");
   lines.push("  insight whoami                        Print the logged-in user's email");
+  lines.push("  insight version                       Check current/latest CLI version");
   lines.push("  insight logout                        Remove saved API key");
   lines.push("  insight update                        Update this CLI with npm");
   lines.push("");
@@ -416,8 +428,10 @@ interface CliIO {
   request?: RequestFn;
   createRequestFromApiKey?: (apiKey: string) => RequestFn;
   runCommand?: RunCommandFn;
+  getLatestVersion?: LatestVersionProvider;
   renderChart?: RenderChartFn;
   progress?: (s: string) => void;
+  writeNotice?: (s: string) => void;
   prompt?: (question: string) => Promise<string>;
   selectTool?: (options: ToolSelectionOption[]) => Promise<string | null>;
   isInteractive?: boolean;
@@ -503,6 +517,11 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     return;
   }
 
+  if (toolName === VERSION_COMMAND) {
+    await runVersionCommand(io);
+    return;
+  }
+
   if (toolName === "whoami") {
     const status = (io.getAuthStatus ?? getAuthStatus)();
     if (status.subject) {
@@ -576,6 +595,7 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
         },
       });
       io.write(JSON.stringify(result, null, 2));
+      await maybeWritePostToolUpgradeNotice(io);
     } catch (error: any) {
       io.write(`Error: ${error.message}\n`);
       io.exit(1);
@@ -639,6 +659,7 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
           2,
         ),
       );
+      await maybeWritePostToolUpgradeNotice(io);
     } catch (error: any) {
       io.write(`Error: ${error.message}\n`);
       io.exit(1);
@@ -750,6 +771,7 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     const output =
       typeof outputValue === "string" ? outputValue : JSON.stringify(outputValue, null, 2);
     io.write(output);
+    await maybeWritePostToolUpgradeNotice(io);
   } catch (error: any) {
     io.write(`Error: ${error.message}\n`);
     io.exit(1);
@@ -793,17 +815,49 @@ async function resolveInteractiveToolName(io: CliIO): Promise<InteractiveToolRes
 
 async function runUpdateCommand(io: CliIO): Promise<void> {
   const runCommand = io.runCommand ?? defaultRunCommand;
-  io.write("Updating InsightSentry MCP CLI with: npm install -g @insightsentry/mcp");
+  const status = await getCachedVersionStatus(io);
+  io.write(`${formatVersionStatus(status)}\n`);
+
+  if (status.latestVersion && !status.updateAvailable) {
+    io.exit(0);
+    return;
+  }
+
+  if (!status.latestVersion) {
+    io.write("Proceeding with update because you explicitly requested it.\n");
+  }
+
+  io.write("Updating InsightSentry CLI/MCP with: npm install -g @insightsentry/mcp\n");
   try {
     const result = await runCommand("npm", ["install", "-g", "@insightsentry/mcp"]);
     const details = [result.stdout?.trim(), result.stderr?.trim()].filter(Boolean).join("\n");
-    if (details) io.write(details);
-    io.write("InsightSentry MCP CLI updated.");
+    if (details) io.write(`${details}\n`);
+    io.write("InsightSentry CLI/MCP updated.");
     io.exit(0);
   } catch (error: any) {
     io.write(`Error: ${error?.message ?? String(error)}`);
     io.exit(1);
   }
+}
+
+async function runVersionCommand(io: CliIO): Promise<void> {
+  const status = await getCachedVersionStatus(io);
+  io.write(formatVersionStatus(status));
+  io.exit(status.latestVersion ? 0 : 1);
+}
+
+async function maybeWritePostToolUpgradeNotice(io: CliIO): Promise<void> {
+  if (!io.writeNotice) return;
+
+  const status = await getCachedVersionStatus(io);
+  const notice = formatUpgradeNotice(status);
+  if (notice) io.writeNotice(notice);
+}
+
+async function getCachedVersionStatus(io: CliIO) {
+  return getVersionStatus(PACKAGE_JSON, io.getLatestVersion ?? fetchLatestPackageVersion, {
+    cachePath: getVersionCacheLocation(),
+  });
 }
 
 async function defaultRunCommand(
@@ -1889,6 +1943,7 @@ export function main() {
   runCli(process.argv.slice(2), {
     write: (s) => process.stdout.write(`${s}\n`),
     progress: (s) => process.stderr.write(`${s}\n`),
+    writeNotice: (s) => process.stderr.write(`${s}\n`),
     prompt: (question) => rl.question(question),
     selectTool: canUseKeyboardToolSelection() ? selectToolWithKeyboard : undefined,
     isInteractive: interactive,

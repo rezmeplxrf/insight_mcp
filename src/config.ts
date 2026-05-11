@@ -68,3 +68,7 @@ export function resolveApiKeyWithSource(): { apiKey?: string; source: ApiKeySour
 export function getConfigLocation(): string {
   return getConfigPath();
 }
+
+export function getVersionCacheLocation(): string {
+  return join(getConfigDir(), "version-cache.json");
+}

@@ -3,7 +3,14 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { buildHelp, buildToolHelp, coerceArgs, parseArgs, runCli } from "../src/cli.js";
+import {
+  buildHelp,
+  buildToolHelp,
+  buildVersion,
+  coerceArgs,
+  parseArgs,
+  runCli,
+} from "../src/cli.js";
 import { loadConfig } from "../src/config.js";
 import { type ToolDefinition, toolDefinitions } from "../src/tool-definitions.js";
 
@@ -154,6 +161,7 @@ describe("buildHelp", () => {
     assert.ok(help.includes("get_quotes"));
     assert.ok(help.includes("get_symbol_series"));
     assert.ok(help.includes("insight whoami"));
+    assert.ok(help.includes("insight version"));
     assert.ok(help.includes("insight update"));
   });
 
@@ -236,11 +244,48 @@ describe("runCli", () => {
 
   it("shows package version with --version", async () => {
     const packageJson = JSON.parse(await readFile("package.json", "utf8"));
+    let latestVersionChecked = false;
 
-    await runCli(["--version"], { write, exit });
+    await runCli(["--version"], {
+      write,
+      exit,
+      getLatestVersion: async () => {
+        latestVersionChecked = true;
+        return "99.0.0";
+      },
+    });
 
     assert.equal(output, `@insightsentry/mcp ${packageJson.version}`);
+    assert.equal(latestVersionChecked, false);
     assert.equal(exitCode, 0);
+  });
+
+  it("shows current and latest version with version command", async () => {
+    await runCli(["version"], {
+      write,
+      exit,
+      getLatestVersion: async () => "99.0.0",
+    });
+
+    assert.ok(output.includes(buildVersion()));
+    assert.ok(output.includes("Latest: 99.0.0"));
+    assert.ok(output.includes("Update available: run `insight update`."));
+    assert.equal(exitCode, 0);
+  });
+
+  it("reports when version check cannot reach the registry", async () => {
+    await runCli(["version"], {
+      write,
+      exit,
+      getLatestVersion: async () => {
+        throw new Error("registry unavailable");
+      },
+    });
+
+    assert.ok(output.includes(buildVersion()));
+    assert.ok(output.includes("Latest: unavailable"));
+    assert.ok(output.includes("registry unavailable"));
+    assert.equal(exitCode, 1);
   });
 
   it("prompts for a tool when run interactively without arguments", async () => {
@@ -570,6 +615,7 @@ describe("runCli", () => {
     await runCli(["update"], {
       write,
       exit,
+      getLatestVersion: async () => "99.0.0",
       runCommand: async (command, args) => {
         commands.push({ command, args });
         return { stdout: "updated package", stderr: "" };
@@ -577,8 +623,27 @@ describe("runCli", () => {
     });
 
     assert.deepEqual(commands, [{ command: "npm", args: ["install", "-g", "@insightsentry/mcp"] }]);
-    assert.ok(output.includes("Updating InsightSentry MCP CLI"));
+    assert.ok(output.includes("Updating InsightSentry CLI/MCP"));
     assert.ok(output.includes("updated package"));
+    assert.equal(exitCode, 0);
+  });
+
+  it("skips update when the CLI is already current", async () => {
+    const commands: Array<{ command: string; args: string[] }> = [];
+    const packageJson = JSON.parse(await readFile("package.json", "utf8"));
+
+    await runCli(["update"], {
+      write,
+      exit,
+      getLatestVersion: async () => packageJson.version,
+      runCommand: async (command, args) => {
+        commands.push({ command, args });
+        return { stdout: "updated package", stderr: "" };
+      },
+    });
+
+    assert.deepEqual(commands, []);
+    assert.ok(output.includes("You are on the latest version."));
     assert.equal(exitCode, 0);
   });
 
@@ -586,6 +651,7 @@ describe("runCli", () => {
     await runCli(["update"], {
       write,
       exit,
+      getLatestVersion: async () => "99.0.0",
       runCommand: async () => {
         throw new Error("npm is not available");
       },
@@ -600,6 +666,72 @@ describe("runCli", () => {
     await runCli(["search_symbols", "--query", "apple"], { write, exit, request: mockRequest });
     const parsed = JSON.parse(output);
     assert.deepEqual(parsed, { symbols: [{ code: "NASDAQ:AAPL" }] });
+    assert.equal(exitCode, undefined);
+  });
+
+  it("checks for upgrades after successful tools without changing stdout", async () => {
+    let notice = "";
+    let latestVersionChecks = 0;
+    const mockRequest = async () => ({ symbols: [{ code: "NASDAQ:AAPL" }] });
+
+    await runCli(["search_symbols", "--query", "apple"], {
+      write,
+      exit,
+      request: mockRequest,
+      writeNotice: (s) => {
+        notice += s;
+      },
+      getLatestVersion: async () => {
+        latestVersionChecks++;
+        return "99.0.0";
+      },
+    });
+
+    assert.deepEqual(JSON.parse(output), { symbols: [{ code: "NASDAQ:AAPL" }] });
+    assert.equal(latestVersionChecks, 1);
+    assert.ok(notice.includes("InsightSentry CLI/MCP 99.0.0 is available"));
+    assert.ok(notice.includes("Run `insight update`."));
+  });
+
+  it("uses cached upgrade checks for repeated tool runs", async () => {
+    let latestVersionChecks = 0;
+    const mockRequest = async () => ({ symbols: [] });
+    const io = {
+      write,
+      exit,
+      request: mockRequest,
+      writeNotice: () => {},
+      getLatestVersion: async () => {
+        latestVersionChecks++;
+        return "99.0.0";
+      },
+    };
+
+    await runCli(["search_symbols", "--query", "apple"], io);
+    output = "";
+    await runCli(["search_symbols", "--query", "microsoft"], io);
+
+    assert.equal(latestVersionChecks, 1);
+  });
+
+  it("does not fail a successful tool when the post-tool version check fails", async () => {
+    let notice = "";
+    const mockRequest = async () => ({ symbols: [{ code: "NASDAQ:AAPL" }] });
+
+    await runCli(["search_symbols", "--query", "apple"], {
+      write,
+      exit,
+      request: mockRequest,
+      writeNotice: (s) => {
+        notice += s;
+      },
+      getLatestVersion: async () => {
+        throw new Error("registry unavailable");
+      },
+    });
+
+    assert.deepEqual(JSON.parse(output), { symbols: [{ code: "NASDAQ:AAPL" }] });
+    assert.equal(notice, "");
     assert.equal(exitCode, undefined);
   });
 
