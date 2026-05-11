@@ -321,6 +321,34 @@ describe("runCli", () => {
     assert.equal(exitCode, undefined);
   });
 
+  it("exits cleanly when Ctrl+C aborts an interactive prompt", async () => {
+    const abort = Object.assign(new Error("Aborted with Ctrl+C"), {
+      code: "ABORT_ERR",
+      name: "AbortError",
+    });
+
+    await runCli([], {
+      write,
+      exit,
+      isInteractive: true,
+      getAuthStatus: () => ({
+        authenticated: true,
+        source: "environment",
+        config_path: "/tmp/insightsentry/config.json",
+        key_present: true,
+        key_format_valid: true,
+        subject: "user@example.com",
+        message: "Logged in using INSIGHTSENTRY_API_KEY.",
+      }),
+      prompt: async () => {
+        throw abort;
+      },
+    });
+
+    assert.ok(output.includes("Choose a tool"));
+    assert.equal(exitCode, 130);
+  });
+
   it("prompts for an API key before the no-args interactive tool picker", async () => {
     const selectedToolIndex =
       toolDefinitions.findIndex((tool) => tool.name === "get_fundamentals_meta") + 1;

@@ -452,6 +452,25 @@ interface InteractiveToolResolution {
 }
 
 export async function runCli(argv: string[], io: CliIO): Promise<void> {
+  try {
+    await runCliInner(argv, io);
+  } catch (error) {
+    if (isPromptAbortError(error)) {
+      io.write("");
+      io.exit(130);
+      return;
+    }
+    throw error;
+  }
+}
+
+function isPromptAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; name?: unknown };
+  return candidate.code === "ABORT_ERR" || candidate.name === "AbortError";
+}
+
+async function runCliInner(argv: string[], io: CliIO): Promise<void> {
   let { toolName, args, help, version } = parseArgs(argv);
   let sessionApiKey: string | undefined;
 
