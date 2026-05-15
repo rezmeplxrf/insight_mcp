@@ -119,9 +119,8 @@ Fundamentals, options, screeners, calendars, documents:
 | `get_symbol_fundamentals` | Company fundamentals |
 | `get_fundamentals_series` | Historical fundamental indicators |
 | `get_fundamentals_meta` | Available fundamental/technical IDs |
-| `list_options` | Available option contracts |
-| `get_options_expiration` | Option chain by expiration |
-| `get_options_strike` | Option chain by strike |
+| `get_options_contracts` | Option contract metadata and codes |
+| `get_options_quotes` | Option quote rows with bid/ask and Greeks |
 | `screen_stocks`, `screen_etfs`, `screen_bonds`, `screen_crypto` | Screen assets |
 | `get_stock_screener_params`, `get_etf_screener_params`, `get_bond_screener_params`, `get_crypto_screener_params` | Screener fields |
 | `get_dividends`, `get_earnings`, `get_ipos`, `get_events` | Calendars |

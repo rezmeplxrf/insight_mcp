@@ -179,7 +179,7 @@ export function buildHelp(): string {
     '  insight screen_stocks --fields "close,volume,market_cap" --exchanges "NYSE,NASDAQ" --sortBy market_cap --sortOrder desc',
   );
   lines.push("  insight get_earnings --c US");
-  lines.push('  insight list_options --code "NASDAQ:AAPL" --type call --range 10');
+  lines.push('  insight get_options_contracts --code "NASDAQ:AAPL" --type call --range 10');
   lines.push("");
   lines.push("API tools support --filter <jsonata> to transform the response.");
   lines.push("Use: insight <tool> --help for tool-specific parameters.");
@@ -285,17 +285,13 @@ const toolExamples: Record<string, string[]> = {
     `insight get_fundamentals_meta --filter '$distinct(base.category)'`,
     `insight get_fundamentals_meta --filter 'base[$contains($lowercase(name), "cash flow")].{ "id": id, "name": name }'`,
   ],
-  list_options: [
-    'insight list_options --code "NASDAQ:AAPL" --type call --range 10',
-    'insight list_options --code "NASDAQ:AAPL" --expiration_min "2026-06-01" --expiration_max "2026-12-31"',
+  get_options_contracts: [
+    'insight get_options_contracts --code "NASDAQ:AAPL" --type call --range 10',
+    'insight get_options_contracts --code "NASDAQ:AAPL" --from "2026-06-01" --to "2026-12-31"',
   ],
-  get_options_expiration: [
-    'insight get_options_expiration --code "NASDAQ:AAPL" --expiration "2026-06-19" --type call',
-    'insight get_options_expiration --code "NASDAQ:AAPL" --from "2026-06-01" --to "2026-07-01" --range 10',
-  ],
-  get_options_strike: [
-    'insight get_options_strike --code "NASDAQ:AAPL" --strike 250 --type call',
-    'insight get_options_strike --code "NASDAQ:AAPL" --range 5 --sortBy delta --sort desc',
+  get_options_quotes: [
+    'insight get_options_quotes --code "NASDAQ:AAPL" --expiration "2026-06-19" --type call',
+    'insight get_options_quotes --code "NASDAQ:AAPL" --range 5 --sortBy delta --sort desc',
   ],
   get_dividends: [
     "insight get_dividends --c US",
@@ -1152,14 +1148,8 @@ function shouldSkipInteractiveToolArg(
 ): boolean {
   if (toolName === "screen_crypto" && key === "countries") return true;
 
-  if (toolName === "get_options_expiration") {
-    if (key === "expiration") return hasArgValue(args.from) || hasArgValue(args.to);
-    if (key === "from" || key === "to") return hasArgValue(args.expiration);
-  }
-
-  if (toolName === "get_options_strike") {
-    if (key === "strike") return hasArgValue(args.range);
-    if (key === "range") return hasArgValue(args.strike);
+  if (toolName === "get_options_quotes" && isOptionQuoteSelector(key)) {
+    return hasAnyOptionQuoteSelector(args);
   }
 
   return false;
@@ -1170,12 +1160,8 @@ function isInteractiveToolArgRequired(
   key: string,
   args: Record<string, string>,
 ): boolean {
-  if (toolName === "get_options_expiration") {
-    return (key === "from" || key === "to") && !hasArgValue(args.expiration);
-  }
-
-  if (toolName === "get_options_strike") {
-    return key === "range" && !hasArgValue(args.strike);
+  if (toolName === "get_options_quotes") {
+    return key === "range" && !hasAnyOptionQuoteSelector(args);
   }
 
   return false;
@@ -1436,25 +1422,31 @@ function validateConditionalToolArgs(
 ): { key: string; error: string } | null {
   const missing = missingConditionalToolArgs(toolName, args);
   if (missing.length === 0) return null;
-  const key = toolName === "get_options_strike" ? "strike" : "expiration";
-  return { key, error: `provide ${missing.join(", ")}` };
+  return { key: "selector", error: `provide ${missing.join(", ")}` };
 }
 
 function missingConditionalToolArgs(toolName: string, args: Record<string, string>): string[] {
-  if (toolName === "get_options_expiration") {
-    const hasExpiration = hasArgValue(args.expiration);
-    if (hasExpiration) return [];
-    const missing = [];
-    if (!hasArgValue(args.from)) missing.push("from");
-    if (!hasArgValue(args.to)) missing.push("to");
-    return missing.length === 2 ? ["expiration or from/to"] : missing;
-  }
-
-  if (toolName === "get_options_strike" && !hasArgValue(args.strike) && !hasArgValue(args.range)) {
-    return ["strike or range"];
+  if (toolName === "get_options_quotes" && !hasAnyOptionQuoteSelector(args)) {
+    return ["strike, range, expiration, from, or to"];
   }
 
   return [];
+}
+
+function isOptionQuoteSelector(key: string): boolean {
+  return (
+    key === "strike" || key === "range" || key === "expiration" || key === "from" || key === "to"
+  );
+}
+
+function hasAnyOptionQuoteSelector(args: Record<string, string>): boolean {
+  return (
+    hasArgValue(args.strike) ||
+    hasArgValue(args.range) ||
+    hasArgValue(args.expiration) ||
+    hasArgValue(args.from) ||
+    hasArgValue(args.to)
+  );
 }
 
 function hasArgValue(value: string | undefined): boolean {

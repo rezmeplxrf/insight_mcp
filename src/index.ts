@@ -55,9 +55,9 @@ Call \`whoami\` to check whether this MCP server has an InsightSentry API key co
 
 ### "Options analysis"
 1. \`search_symbols\` — Find the underlying
-2. \`list_options\` — Get available option contracts. Narrow with API params: \`type\` (call/put), \`range\` (strike ±N% of price), \`expiration_min\`/\`expiration_max\` (date range).
-3. \`get_options_expiration\` or \`get_options_strike\` — Get chain with Greeks (delta, gamma, theta, vega, IV). API params: \`range\`, \`type\`, \`from\`/\`to\` (date range), \`sortBy\` (delta, implied_volatility, strike_price, etc.), \`sort\` (asc/desc). Use these to narrow at the API level, then \`filter\` to refine by Greeks (e.g., delta range, IV threshold).
-4. \`get_quotes\` — Real-time option quotes (use the OPRA:... or Futures option code)
+2. \`get_options_contracts\` — Get available option contract metadata and codes. Narrow with API params: \`type\` (call/put), \`strike\`, \`range\` (strike ±N% of price), \`expiration\`, or \`from\`/\`to\` (expiration date range).
+3. \`get_options_quotes\` — Get filtered option quote rows with bid/ask and Greeks (delta, gamma, theta, vega, IV). Provide at least one selector: \`strike\`, \`range\`, \`expiration\`, \`from\`, or \`to\`. Use \`sortBy\`/\`sort\` to narrow at the API level, then \`filter\` to refine by Greeks.
+4. \`get_quotes\` — Latest trade price, volume, and top-of-book quote data for specific option codes (use the OPRA:... or futures option code)
 5. \`get_symbol_series\` — Historical option price data (Only available for OPRA)
 
 ### "What's happening in the market?"
@@ -122,7 +122,7 @@ Examples:
 - \`get_fundamentals_meta({ filter: "$distinct(base.category)" })\` — list all available categories
 - \`get_fundamentals_meta({ filter: "$distinct(base.group)" })\` — list all available groups
 - \`get_fundamentals_meta({ filter: "fundamental_series[$contains($lowercase(name), "cash") or $contains($lowercase(name), "income")].id" })\` — find series IDs for use with get_fundamentals_series
-- \`get_options_expiration({ code: "NASDAQ:AAPL", expiration: "2026-06-17", range: 10, type: "call", filter: "data[$abs(delta) >= 0.4 and $abs(delta) <= 0.6].{ "code": code, "strike": strike_price, "delta": delta, "iv": implied_volatility }" })\` — API narrows to ±10% strikes + calls, then filter refines by delta
+- \`get_options_quotes({ code: "NASDAQ:AAPL", expiration: "2026-06-17", range: 10, type: "call", filter: "data[$abs(delta) >= 0.4 and $abs(delta) <= 0.6].{ "code": code, "strike": strike_price, "delta": delta, "iv": implied_volatility }" })\` — API narrows to ±10% strikes + calls, then filter refines by delta
 - \`get_symbol_series({ symbol: "NASDAQ:AAPL", bar_type: "day", dp: 300, filter: "{ "code": code, "period_return_pct": $round((series[-1].close - series[0].open) / series[0].open * 100, 2), "total_volume": $sum(series.volume) }" })\` — compute period return and total volume
 - \`screen_stocks({ fields: ["close", "volume", "market_cap", "change_percent"], filter: "data[change_percent][change_percent > 0].{ "name": name, "change_percent": change_percent }" })\` — only gainers (first predicate filters out nulls)
 - \`get_documents({ code: "NASDAQ:AAPL", filter: "$[form="10-K" or form="10-Q"].{ "id": id, "title": title, "form": form }" })\` — only SEC filings (10-K/10-Q)

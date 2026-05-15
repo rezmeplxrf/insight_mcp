@@ -98,6 +98,21 @@ describe("parseArgs", () => {
   });
 });
 
+describe("tool definitions", () => {
+  it("exposes current options endpoints and omits deprecated option tools", () => {
+    const names = new Set(toolDefinitions.map((tool) => tool.name));
+
+    assert.ok(names.has("get_options_contracts"));
+    assert.ok(names.has("get_options_quotes"));
+    assert.ok(!names.has("list_options"));
+    assert.ok(!names.has("get_options_expiration"));
+    assert.ok(!names.has("get_options_strike"));
+
+    assert.equal(findTool("get_options_contracts").pathTemplate, "/v3/options/contracts");
+    assert.equal(findTool("get_options_quotes").pathTemplate, "/v3/options/quotes");
+  });
+});
+
 describe("coerceArgs", () => {
   const seriesToolDef = findTool("get_symbol_series");
 
@@ -858,7 +873,7 @@ describe("runCli", () => {
     assert.ok(!questions.some((question) => question.includes("...")));
   });
 
-  it("requires date range prompts interactively when expiration is skipped", async () => {
+  it("accepts an option quote date selector interactively", async () => {
     const questions: string[] = [];
     const mockRequest = async (
       _method: string,
@@ -866,7 +881,7 @@ describe("runCli", () => {
       params: Record<string, any>,
     ) => params;
 
-    await runCli(["get_options_expiration", "--code", "NASDAQ:AAPL"], {
+    await runCli(["get_options_quotes", "--code", "NASDAQ:AAPL"], {
       write,
       exit,
       request: mockRequest,
@@ -882,26 +897,22 @@ describe("runCli", () => {
     const parsed = JSON.parse(output);
     assert.equal(parsed.code, "NASDAQ:AAPL");
     assert.equal(parsed.from, "2026-06-01");
-    assert.equal(parsed.to, "2026-07-01");
     assert.ok(
       questions.some(
         (question) =>
           question.startsWith("Expiration") &&
           question.includes("optional") &&
-          question.includes("Expiration: Exact expiration date") &&
+          question.includes("Exact expiration date") &&
           question.includes("Expiration (optional, press Enter to skip):"),
       ),
     );
-    assert.ok(
-      questions.some((question) => question.startsWith("From") && question.includes("required")),
-    );
-    assert.ok(
-      questions.some((question) => question.startsWith("To") && question.includes("required")),
-    );
+    assert.ok(questions.some((question) => question.startsWith("From")));
+    assert.ok(!questions.some((question) => question.startsWith("To")));
+    assert.ok(!questions.some((question) => question.startsWith("Range")));
     assert.ok(!output.includes("Invalid Expiration"));
   });
 
-  it("skips interactive date range prompts when expiration is provided", async () => {
+  it("skips other option quote selector prompts when expiration is provided", async () => {
     const questions: string[] = [];
     const mockRequest = async (
       _method: string,
@@ -909,7 +920,7 @@ describe("runCli", () => {
       params: Record<string, any>,
     ) => params;
 
-    await runCli(["get_options_expiration", "--code", "NASDAQ:AAPL"], {
+    await runCli(["get_options_quotes", "--code", "NASDAQ:AAPL"], {
       write,
       exit,
       request: mockRequest,
@@ -925,9 +936,10 @@ describe("runCli", () => {
     assert.equal(parsed.expiration, "2026-06-19");
     assert.ok(!questions.some((question) => question.startsWith("From")));
     assert.ok(!questions.some((question) => question.startsWith("To")));
+    assert.ok(!questions.some((question) => question.startsWith("Range")));
   });
 
-  it("requires range interactively when strike is skipped", async () => {
+  it("requires range interactively when other option quote selectors are skipped", async () => {
     const questions: string[] = [];
     const mockRequest = async (
       _method: string,
@@ -935,7 +947,7 @@ describe("runCli", () => {
       params: Record<string, any>,
     ) => params;
 
-    await runCli(["get_options_strike", "--code", "NASDAQ:AAPL"], {
+    await runCli(["get_options_quotes", "--code", "NASDAQ:AAPL"], {
       write,
       exit,
       request: mockRequest,
@@ -950,13 +962,16 @@ describe("runCli", () => {
     const parsed = JSON.parse(output);
     assert.equal(parsed.range, 5);
     assert.ok(questions.some((question) => question.startsWith("Strike")));
+    assert.ok(questions.some((question) => question.startsWith("Expiration")));
+    assert.ok(questions.some((question) => question.startsWith("From")));
+    assert.ok(questions.some((question) => question.startsWith("To")));
     assert.ok(
       questions.some((question) => question.startsWith("Range") && question.includes("required")),
     );
     assert.ok(!output.includes("Invalid Strike"));
   });
 
-  it("skips interactive range prompt when strike is provided", async () => {
+  it("skips other option quote selector prompts when strike is provided", async () => {
     const questions: string[] = [];
     const mockRequest = async (
       _method: string,
@@ -964,7 +979,7 @@ describe("runCli", () => {
       params: Record<string, any>,
     ) => params;
 
-    await runCli(["get_options_strike", "--code", "NASDAQ:AAPL"], {
+    await runCli(["get_options_quotes", "--code", "NASDAQ:AAPL"], {
       write,
       exit,
       request: mockRequest,
@@ -978,6 +993,9 @@ describe("runCli", () => {
 
     const parsed = JSON.parse(output);
     assert.equal(parsed.strike, 250);
+    assert.ok(!questions.some((question) => question.startsWith("Expiration")));
+    assert.ok(!questions.some((question) => question.startsWith("From")));
+    assert.ok(!questions.some((question) => question.startsWith("To")));
     assert.ok(!questions.some((question) => question.startsWith("Range")));
   });
 
@@ -1251,16 +1269,16 @@ describe("runCli", () => {
   });
 
   it("reports dynamic option requirements clearly when interactive prompts are left blank", async () => {
-    await runCli(["get_options_strike", "--code", "NASDAQ:AAPL"], {
+    await runCli(["get_options_quotes", "--code", "NASDAQ:AAPL"], {
       write,
       exit,
-      request: async () => assert.fail("missing strike/range should fail before request"),
+      request: async () => assert.fail("missing quote selector should fail before request"),
       isInteractive: true,
       prompt: async () => "",
     });
 
-    assert.ok(output.includes("Missing required options for get_options_strike"));
-    assert.ok(output.includes("strike or range"));
+    assert.ok(output.includes("Missing required options for get_options_quotes"));
+    assert.ok(output.includes("strike, range, expiration, from, or to"));
     assert.equal(exitCode, 1);
   });
 
@@ -1412,30 +1430,19 @@ describe("runCli", () => {
     assert.equal(exitCode, 1);
   });
 
-  it("validates missing option expiration filters before calling the API", async () => {
-    await runCli(["get_options_expiration", "--code", "NASDAQ:AAPL"], {
+  it("validates missing option quote selectors before calling the API", async () => {
+    await runCli(["get_options_quotes", "--code", "NASDAQ:AAPL"], {
       write,
       exit,
-      request: async () => assert.fail("missing option filters should fail before request"),
+      request: async () => assert.fail("missing quote selector should fail before request"),
     });
 
-    assert.ok(output.includes("Invalid Expiration"));
+    assert.ok(output.includes("Invalid Selector"));
+    assert.ok(output.includes("strike"));
+    assert.ok(output.includes("range"));
     assert.ok(output.includes("expiration"));
     assert.ok(output.includes("from"));
     assert.ok(output.includes("to"));
-    assert.equal(exitCode, 1);
-  });
-
-  it("validates missing option strike filters before calling the API", async () => {
-    await runCli(["get_options_strike", "--code", "NASDAQ:AAPL"], {
-      write,
-      exit,
-      request: async () => assert.fail("missing option filters should fail before request"),
-    });
-
-    assert.ok(output.includes("Invalid Strike"));
-    assert.ok(output.includes("strike"));
-    assert.ok(output.includes("range"));
     assert.equal(exitCode, 1);
   });
 

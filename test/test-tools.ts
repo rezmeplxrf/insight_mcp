@@ -279,39 +279,33 @@ test("get_fundamentals_series: basic", async () => {
   assert(r.data[0].data?.length > 0, "should have data points");
 });
 
-// ─── list_options ───
-test("list_options: basic", async () => {
-  const r = await apiCall("GET", "/v3/options/list", { code: "NASDAQ:AAPL" });
-  assert(r.codes?.length > 0, "should have option codes");
+// ─── get_options_contracts ───
+test("get_options_contracts: basic", async () => {
+  const r = await apiCall("GET", "/v3/options/contracts", { code: "NASDAQ:AAPL" });
+  assert(r.data?.length > 0, "should have option contracts");
   assert(typeof r.last_update === "number", "should have last_update");
 });
 
-test("list_options: with range and type", async () => {
-  const r = await apiCall("GET", "/v3/options/list", {
+test("get_options_contracts: with range and type", async () => {
+  const r = await apiCall("GET", "/v3/options/contracts", {
     code: "NASDAQ:AAPL",
     type: "call",
     range: 10,
   });
-  assert(r.codes?.length > 0, "should have filtered option codes");
+  assert(r.data?.length > 0, "should have filtered option contracts");
   assert(typeof r.last_price === "number", "should have last_price when range is provided");
 });
 
-// ─── get_options_expiration ───
-test("get_options_expiration: basic", async () => {
-  // First get a valid expiration from list_options
-  const list = await apiCall("GET", "/v3/options/list", {
+// ─── get_options_quotes ───
+test("get_options_quotes: basic", async () => {
+  const contracts = await apiCall("GET", "/v3/options/contracts", {
     code: "NASDAQ:AAPL",
     type: "call",
     range: 5,
   });
-  // Parse an expiration from the first code (format: OPRA:AAPLyymmddCstrike)
-  const firstCode = list.codes[0];
-  const match = firstCode.match(/OPRA:\w+(\d{6})[CP]/);
-  assert(match, `could not parse expiration from ${firstCode}`);
-  const dateStr = match[1];
-  const expiration = `20${dateStr.slice(0, 2)}-${dateStr.slice(2, 4)}-${dateStr.slice(4, 6)}`;
+  const expiration = contracts.data[0].expiration;
 
-  const r = await apiCall("GET", "/v3/options/expiration", {
+  const r = await apiCall("GET", "/v3/options/quotes", {
     code: "NASDAQ:AAPL",
     expiration,
     type: "call",
@@ -325,21 +319,17 @@ test("get_options_expiration: basic", async () => {
   assert(typeof opt.implied_volatility === "number", "should have implied_volatility");
 });
 
-test("get_options_expiration: with filter (delta range)", async () => {
-  const list = await apiCall("GET", "/v3/options/list", {
+test("get_options_quotes: with filter (delta range)", async () => {
+  const contracts = await apiCall("GET", "/v3/options/contracts", {
     code: "NASDAQ:AAPL",
     type: "call",
     range: 10,
   });
-  const firstCode = list.codes[0];
-  const match = firstCode.match(/OPRA:\w+(\d{6})[CP]/);
-  assert(match, "option code should include expiration date");
-  const dateStr = match[1];
-  const expiration = `20${dateStr.slice(0, 2)}-${dateStr.slice(2, 4)}-${dateStr.slice(4, 6)}`;
+  const expiration = contracts.data[0].expiration;
 
   const r = await apiCall(
     "GET",
-    "/v3/options/expiration",
+    "/v3/options/quotes",
     { code: "NASDAQ:AAPL", expiration, range: 10, type: "call" },
     'data[$abs(delta) >= 0.3 and $abs(delta) <= 0.7].{ "code": code, "strike": strike_price, "delta": delta, "iv": implied_volatility }',
   );
@@ -352,9 +342,8 @@ test("get_options_expiration: with filter (delta range)", async () => {
   assert(Math.abs(arr[0].delta) <= 0.7, "delta should be <= 0.7");
 });
 
-// ─── get_options_strike ───
-test("get_options_strike: basic", async () => {
-  const r = await apiCall("GET", "/v3/options/strike", {
+test("get_options_quotes: with range", async () => {
+  const r = await apiCall("GET", "/v3/options/quotes", {
     code: "NASDAQ:AAPL",
     range: 5,
     type: "call",
