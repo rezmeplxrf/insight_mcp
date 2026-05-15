@@ -1,6 +1,6 @@
 # Insight MCP Agent Instructions
 
-This package is both a CLI and an MCP server. Default to a user-friendly product mindset: the tool should help users complete the task with the least friction, not punish small mistakes.
+This package is both a CLI and an MCP server. Default to a user-friendly product mindset: the tool should help users complete the task with the least friction, not punish small mistakes. This is public repository. Don't store any sensitive info or rely on out-of-scope files.
 
 ## UX Principles
 
