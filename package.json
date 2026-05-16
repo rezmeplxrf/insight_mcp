@@ -1,7 +1,7 @@
 {
   "name": "@insightsentry/mcp",
   "mcpName": "io.github.rezmeplxrf/insightsentry_mcp",
-  "version": "1.4.24",
+  "version": "1.4.25",
   "description": "MCP server for InsightSentry financial data API - provides AI-accessible tools for market data, screening, options, and comprehensive API documentation resources",
   "type": "module",
   "main": "dist/index.js",
@@ -44,17 +44,17 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "chart.js": "^4.5.1",
     "chartjs-node-canvas": "^5.0.0",
-    "jsonata": "^2.1.0",
-    "zod": "^4.3.6"
+    "jsonata": "^2.2.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.10",
-    "@types/node": "^22.19.17",
-    "tsx": "^4.19.4",
-    "typescript": "^5.8.3"
+    "@types/node": "^22.19.19",
+    "tsx": "^4.22.0",
+    "typescript": "^5.9.3"
   },
   "engines": {
     "node": ">=18"
