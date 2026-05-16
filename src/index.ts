@@ -55,8 +55,8 @@ Call \`whoami\` to check whether this MCP server has an InsightSentry API key co
 
 ### "Options analysis"
 1. \`search_symbols\` — Find the underlying
-2. \`get_options_contracts\` — Get available option contract metadata and codes. Narrow with API params: \`type\` (call/put), \`strike\`, \`range\` (strike ±N% of price), \`expiration\`, or \`from\`/\`to\` (expiration date range).
-3. \`get_options_snapshot\` — Get latest option daily/previous bars, bid/ask, and latest trade rows. Use \`strike\`, \`range\`, \`expiration\`, \`from\`, or \`to\` to narrow results. If no strike, range, expiration, from, or to selector is provided, the API applies \`range=1000\` internally.
+2. \`get_options_contracts\` — Get available option contract metadata and codes. Narrow with API params: \`type\` (call/put), \`strike\`, \`range\` (strike ±N% of price), \`expiration\`, or \`from\`/\`to\` (expiration date range). If the response includes \`next_token\`, request the next page with the same filters plus \`next_token\`.
+3. \`get_options_snapshot\` — Get latest option daily/previous bars, bid/ask, and latest trade rows. Use \`strike\`, \`range\`, \`expiration\`, \`from\`, or \`to\` to narrow results. If the response includes \`next_token\`, request the next page with the same filters plus \`next_token\`. If no strike, range, expiration, from, or to selector is provided, the API applies \`range=1000\` internally.
 4. \`get_options_quotes\` — Get option quote rows with bid/ask and Greeks (delta, gamma, theta, vega, IV). Use \`strike\`, \`range\`, \`expiration\`, \`from\`, or \`to\` to narrow results. If no strike, range, expiration, from, or to selector is provided, the API applies \`range=1000\` internally. Use \`sortBy\`/\`sort\` to narrow at the API level, then \`filter\` to refine by Greeks.
 5. \`get_quotes\` — Latest trade price, volume, and top-of-book quote data for specific option codes (use the OPRA:... or futures option code)
 6. \`get_symbol_series\` — Historical option price data (Only available for OPRA)

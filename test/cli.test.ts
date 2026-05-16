@@ -125,6 +125,18 @@ describe("tool definitions", () => {
       assert.match(buildToolHelp(tool), /Values above 1000 are capped at 1000/);
     }
   });
+
+  it("exposes option pagination tokens where the API supports paging", () => {
+    for (const toolName of ["get_options_contracts", "get_options_snapshot"]) {
+      const tool = findTool(toolName);
+      const nextTokenSchema = tool.schema.next_token;
+      assert.ok(nextTokenSchema, `${toolName} should expose next_token`);
+
+      assert.equal(nextTokenSchema.safeParse("cursor-123").success, true);
+      assert.match(buildToolHelp(tool), /next_token/);
+      assert.match(tool.description, /next_token/);
+    }
+  });
 });
 
 describe("coerceArgs", () => {

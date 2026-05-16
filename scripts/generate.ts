@@ -1,8 +1,8 @@
 /**
- * Build script: reads openapi.json and generates tool-definitions.ts with Zod schemas
+ * Build script: reads the checked-in openapi.json and generates tool-definitions.ts with Zod schemas
  * Run with: npx tsx scripts/generate.ts
  */
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -83,9 +83,9 @@ const WORKFLOW_HINTS: Record<string, string> = {
   get_symbol_contracts:
     " → Returns {base_code: string, contracts: [{code: string, settlement_date: string}]}. Use a specific contract code (e.g., CME_MINI:NQH2024) with get_symbol_history for deep history.",
   get_options_contracts:
-    " → Returns {underlying_code: string, last_update: number, last_price?: number, data: [{code: string, description: string, expiration: string, type: string, status: string, style: string, strike_price: string, multiplier: string, size: string, open_interest?: string|null, open_interest_date?: string|null, close_price?: string|null, close_price_date?: string|null}]}. Use this to discover tradable option contract codes and metadata. Use get_options_snapshot for latest bars/quotes/trades, get_options_quotes for Greeks, get_quotes with returned codes for last trade price/volume, or get_symbol_series for historical OPRA option bars.",
+    " → Returns {underlying_code: string, last_update: number, last_price?: number, next_token?: string, data: [{code: string, description: string, expiration: string, type: string, status: string, style: string, strike_price: string, multiplier: string, size: string, open_interest?: string|null, open_interest_date?: string|null, close_price?: string|null, close_price_date?: string|null}]}. Use this to discover tradable option contract codes and metadata. If next_token is present, request the next page with the same filters plus next_token. Use get_options_snapshot for latest bars/quotes/trades, get_options_quotes for Greeks, get_quotes with returned codes for last trade price/volume, or get_symbol_series for historical OPRA option bars.",
   get_options_snapshot:
-    " → Returns {underlying_code: string, last_price?: number, data: [{code: string, prev?: {time?: number, open?: number, high?: number, low?: number, close?: number, volume?: number, trade_count?: number, vwap?: number}, daily?: {time?: number, open?: number, high?: number, low?: number, close?: number, volume?: number, trade_count?: number, vwap?: number}, latest_quote?: {time?: number, ask?: number, ask_size?: number, bid?: number, bid_size?: number}, latest_trade?: {time?: number, last_price?: number, size?: number}}]}. Use this when you need latest option bars, quotes, and trades in one response. Use strike, range, expiration, from, or to to narrow results. If no strike, range, expiration, from, or to selector is provided, range=1000 is applied internally.",
+    " → Returns {underlying_code: string, last_price?: number, next_token?: string, data: [{code: string, prev?: {time?: number, open?: number, high?: number, low?: number, close?: number, volume?: number, trade_count?: number, vwap?: number}, daily?: {time?: number, open?: number, high?: number, low?: number, close?: number, volume?: number, trade_count?: number, vwap?: number}, latest_quote?: {time?: number, ask?: number, ask_size?: number, bid?: number, bid_size?: number}, latest_trade?: {time?: number, last_price?: number, size?: number}}]}. Use this when you need latest option bars, quotes, and trades in one response. Use strike, range, expiration, from, or to to narrow results. If next_token is present, request the next page with the same filters plus next_token. If no strike, range, expiration, from, or to selector is provided, range=1000 is applied internally.",
   get_options_quotes:
     " → Returns {underlying_code: string, last_update: number, last_price?: number, data: [{code?: string, type: string, strike_price: number, expiration: number, ask_price: number, bid_price: number, delta: number, gamma: number, theta: number, vega: number, rho: number, implied_volatility: number, theoretical_price: number, bid_iv: number, ask_iv: number}]}. Use strike, range, expiration, from, or to to narrow results. If no strike, range, expiration, from, or to selector is provided, range=1000 is applied internally. Use API params type, sortBy, and sort to narrow server-side, then filter for Greek thresholds. To get last trade price and volume of returned contracts, call get_quotes with the option codes (up to 10). For historical option price data use get_symbol_series.",
   get_stock_screener_params:
@@ -381,11 +381,8 @@ function collectParams(
 }
 
 async function generate(): Promise<void> {
-  const response = await fetch("https://insightsentry.com/openapi.json");
-  if (!response.ok) {
-    throw new Error(`Failed to fetch OpenAPI spec: ${response.status} ${response.statusText}`);
-  }
-  const spec: OpenAPISpec = (await response.json()) as OpenAPISpec;
+  const specPath = resolve(__dirname, "../../website/public/openapi.json");
+  const spec: OpenAPISpec = JSON.parse(readFileSync(specPath, "utf-8")) as OpenAPISpec;
 
   const toolEntries: string[] = [];
   const toolNames: string[] = [];
@@ -460,7 +457,7 @@ async function generate(): Promise<void> {
   }
 
   const output = `// AUTO-GENERATED by scripts/generate.ts — do not edit manually
-// Source: https://insightsentry.com/openapi.json
+// Source: ../website/public/openapi.json
 import { z } from "zod";
 
 export interface ToolDefinition {
