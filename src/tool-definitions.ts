@@ -130,7 +130,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "get_options_contracts",
-    description: "List option contracts. Retrieve available option contracts for a supported underlying symbol. Supports filtering by exact strike, strike range around the current underlying price, expiration date, expiration date range, and option type. Use the /v3/symbols/quotes endpoint with the returned option codes to get latest trade price and volume (for example, codes=OPRA:AAPL270617C230.0,OPRA:AAPL270617C260.0, up to 10 codes per request). → Returns {underlying_code: string, last_update: number, last_price?: number, data: [{code: string, description: string, expiration: string, type: string, status: string, style: string, strike_price: string, multiplier: string, size: string, open_interest?: string|null, open_interest_date?: string|null, close_price?: string|null, close_price_date?: string|null}]}. Use this to discover tradable option contract codes and metadata. Use get_options_quotes for bid/ask and Greeks, get_quotes with returned codes for last trade price/volume, or get_symbol_series for historical OPRA option bars.",
+    description: "List option contracts. Retrieve available option contracts for a supported underlying symbol. Futures options are not currently supported by this endpoint. Supports filtering by exact strike, strike range around the current underlying price, expiration date, expiration date range, and option type. If only code is provided, range=1000 is applied internally. Use the /v3/symbols/quotes endpoint with the returned option codes to get latest trade price and volume (for example, codes=OPRA:AAPL270617C230.0,OPRA:AAPL270617C260.0, up to 10 codes per request). → Returns {underlying_code: string, last_update: number, last_price?: number, data: [{code: string, description: string, expiration: string, type: string, status: string, style: string, strike_price: string, multiplier: string, size: string, open_interest?: string|null, open_interest_date?: string|null, close_price?: string|null, close_price_date?: string|null}]}. Use this to discover tradable option contract codes and metadata. Use get_options_snapshot for latest bars/quotes/trades, get_options_quotes for Greeks, get_quotes with returned codes for last trade price/volume, or get_symbol_series for historical OPRA option bars.",
     method: "GET",
     pathTemplate: "/v3/options/contracts",
     schema: {
@@ -139,7 +139,22 @@ export const toolDefinitions: ToolDefinition[] = [
     expiration: z.string().describe("(Optional) Exact expiration date. Ignored when from or to is provided. (Format: YYYY-MM-DD)").optional(),
     from: z.string().describe("(Optional) Minimum expiration date. When provided, expiration parameter is ignored. (Format: YYYY-MM-DD)").optional(),
     to: z.string().describe("(Optional) Maximum expiration date. When provided, expiration parameter is ignored. (Format: YYYY-MM-DD)").optional(),
-    range: z.number().int().min(1).describe("(Optional) Strike price range as a percentage of the current underlying price. For example, range=10 returns only options with strikes within ±10% of the current price. Values above 1000 are capped at 1000.").optional(),
+    range: z.number().int().min(1).describe("(Optional) Strike price range as a percentage of the current underlying price. For example, range=10 returns only options with strikes within ±10% of the current price. Values above 1000 are capped at 1000. If only code is provided, range=1000 is applied internally.").optional(),
+    type: z.enum(["call", "put"]).describe("(Optional) Filter by option type.").optional(),
+  },
+  },
+  {
+    name: "get_options_snapshot",
+    description: "Option snapshots. Retrieve latest option market snapshots for a supported underlying symbol. Futures options are not currently supported by this endpoint. Supports filtering by exact strike, strike range around the current underlying price, expiration date, expiration date range, and option type. If only code is provided, range=1000 is applied internally. Response timestamps are Unix timestamps in milliseconds. Snapshot rows include previous daily bar, current daily bar, latest quote, and latest trade when available. → Returns {underlying_code: string, last_price?: number, data: [{code: string, prev?: {time?: number, open?: number, high?: number, low?: number, close?: number, volume?: number, trade_count?: number, vwap?: number}, daily?: {time?: number, open?: number, high?: number, low?: number, close?: number, volume?: number, trade_count?: number, vwap?: number}, latest_quote?: {time?: number, ask?: number, ask_size?: number, bid?: number, bid_size?: number}, latest_trade?: {time?: number, last_price?: number, size?: number}}]}. Use this when you need latest option bars, quotes, and trades in one response. Use strike, range, expiration, from, or to to narrow results. If only code is provided, range=1000 is applied internally.",
+    method: "GET",
+    pathTemplate: "/v3/options/snapshot",
+    schema: {
+    code: z.string().describe("(Required) Symbol code in Exchange:Symbol format (e.g., NASDAQ:AAPL). Use search_symbols to find the correct code."),
+    strike: z.number().min(0).describe("(Optional) Exact strike price. Takes precedence over range when both are provided.").optional(),
+    expiration: z.string().describe("(Optional) Exact expiration date. Ignored when from or to is provided. (Format: YYYY-MM-DD)").optional(),
+    from: z.string().describe("(Optional) Minimum expiration date. When provided, expiration parameter is ignored. (Format: YYYY-MM-DD)").optional(),
+    to: z.string().describe("(Optional) Maximum expiration date. When provided, expiration parameter is ignored. (Format: YYYY-MM-DD)").optional(),
+    range: z.number().int().min(1).max(1000).describe("(Optional) Strike price range as a percentage of the current underlying price. For example, range=10 returns only options with strikes within ±10% of the current price. Values above 1000 are capped at 1000. Ignored when strike is provided. If only code is provided, range=1000 is applied internally.").optional(),
     type: z.enum(["call", "put"]).describe("(Optional) Filter by option type.").optional(),
   },
   },

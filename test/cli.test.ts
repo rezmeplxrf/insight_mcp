@@ -103,12 +103,14 @@ describe("tool definitions", () => {
     const names = new Set(toolDefinitions.map((tool) => tool.name));
 
     assert.ok(names.has("get_options_contracts"));
+    assert.ok(names.has("get_options_snapshot"));
     assert.ok(names.has("get_options_quotes"));
     assert.ok(!names.has("list_options"));
     assert.ok(!names.has("get_options_expiration"));
     assert.ok(!names.has("get_options_strike"));
 
     assert.equal(findTool("get_options_contracts").pathTemplate, "/v3/options/contracts");
+    assert.equal(findTool("get_options_snapshot").pathTemplate, "/v3/options/snapshot");
     assert.equal(findTool("get_options_quotes").pathTemplate, "/v3/options/quotes");
   });
 

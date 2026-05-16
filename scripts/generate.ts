@@ -32,6 +32,7 @@ const TOOL_NAME_MAP: Record<string, Record<string, string>> = {
   },
   "/v3/symbols/fundamentals": { get: "get_fundamentals_meta" },
   "/v3/options/contracts": { get: "get_options_contracts" },
+  "/v3/options/snapshot": { get: "get_options_snapshot" },
   "/v3/options/quotes": { get: "get_options_quotes" },
   "/v3/screeners/stock": {
     get: "get_stock_screener_params",
@@ -82,7 +83,9 @@ const WORKFLOW_HINTS: Record<string, string> = {
   get_symbol_contracts:
     " → Returns {base_code: string, contracts: [{code: string, settlement_date: string}]}. Use a specific contract code (e.g., CME_MINI:NQH2024) with get_symbol_history for deep history.",
   get_options_contracts:
-    " → Returns {underlying_code: string, last_update: number, last_price?: number, data: [{code: string, description: string, expiration: string, type: string, status: string, style: string, strike_price: string, multiplier: string, size: string, open_interest?: string|null, open_interest_date?: string|null, close_price?: string|null, close_price_date?: string|null}]}. Use this to discover tradable option contract codes and metadata. Use get_options_quotes for bid/ask and Greeks, get_quotes with returned codes for last trade price/volume, or get_symbol_series for historical OPRA option bars.",
+    " → Returns {underlying_code: string, last_update: number, last_price?: number, data: [{code: string, description: string, expiration: string, type: string, status: string, style: string, strike_price: string, multiplier: string, size: string, open_interest?: string|null, open_interest_date?: string|null, close_price?: string|null, close_price_date?: string|null}]}. Use this to discover tradable option contract codes and metadata. Use get_options_snapshot for latest bars/quotes/trades, get_options_quotes for Greeks, get_quotes with returned codes for last trade price/volume, or get_symbol_series for historical OPRA option bars.",
+  get_options_snapshot:
+    " → Returns {underlying_code: string, last_price?: number, data: [{code: string, prev?: {time?: number, open?: number, high?: number, low?: number, close?: number, volume?: number, trade_count?: number, vwap?: number}, daily?: {time?: number, open?: number, high?: number, low?: number, close?: number, volume?: number, trade_count?: number, vwap?: number}, latest_quote?: {time?: number, ask?: number, ask_size?: number, bid?: number, bid_size?: number}, latest_trade?: {time?: number, last_price?: number, size?: number}}]}. Use this when you need latest option bars, quotes, and trades in one response. Use strike, range, expiration, from, or to to narrow results. If only code is provided, range=1000 is applied internally.",
   get_options_quotes:
     " → Returns {underlying_code: string, last_update: number, last_price?: number, data: [{code?: string, type: string, strike_price: number, expiration: number, ask_price: number, bid_price: number, delta: number, gamma: number, theta: number, vega: number, rho: number, implied_volatility: number, theoretical_price: number, bid_iv: number, ask_iv: number}]}. Use strike, range, expiration, from, or to to narrow results. If only code is provided, range=1000 is applied internally. Use API params type, sortBy, and sort to narrow server-side, then filter for Greek thresholds. To get last trade price and volume of returned contracts, call get_quotes with the option codes (up to 10). For historical option price data use get_symbol_series.",
   get_stock_screener_params:

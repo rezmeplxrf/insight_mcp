@@ -289,6 +289,10 @@ const toolExamples: Record<string, string[]> = {
     'insight get_options_contracts --code "NASDAQ:AAPL" --type call --range 10',
     'insight get_options_contracts --code "NASDAQ:AAPL" --from "2026-06-01" --to "2026-12-31"',
   ],
+  get_options_snapshot: [
+    'insight get_options_snapshot --code "NASDAQ:AAPL"',
+    'insight get_options_snapshot --code "NASDAQ:AAPL" --expiration "2026-06-19" --type call',
+  ],
   get_options_quotes: [
     'insight get_options_quotes --code "NASDAQ:AAPL"',
     'insight get_options_quotes --code "NASDAQ:AAPL" --expiration "2026-06-19" --type call',
