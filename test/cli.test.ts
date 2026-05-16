@@ -111,6 +111,18 @@ describe("tool definitions", () => {
     assert.equal(findTool("get_options_contracts").pathTemplate, "/v3/options/contracts");
     assert.equal(findTool("get_options_quotes").pathTemplate, "/v3/options/quotes");
   });
+
+  it("documents option range caps without rejecting values above the cap", () => {
+    for (const toolName of ["get_options_contracts", "get_options_quotes"]) {
+      const tool = findTool(toolName);
+      const rangeSchema = tool.schema.range;
+      assert.ok(rangeSchema, `${toolName} should expose range`);
+
+      assert.equal(rangeSchema.safeParse(1500).success, true);
+      assert.equal(rangeSchema.safeParse(0).success, false);
+      assert.match(buildToolHelp(tool), /Values above 1000 are capped at 1000/);
+    }
+  });
 });
 
 describe("coerceArgs", () => {

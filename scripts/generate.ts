@@ -266,10 +266,30 @@ const PARAM_DESCRIPTION_OVERRIDES: Record<string, string> = {
 const SCREENER_MAX_RANGE_ZOD =
   'z.number().int().describe("Number of screener results returned per page. The API gateway clamps values below 1000 to 1000 and values above 15000 to 15000.")';
 
+const OPTION_RANGE_CAP_TEXT = "Values above 1000 are capped at 1000.";
+
 interface ParamInfo {
   name: string;
   zodExpr: string;
   required: boolean;
+}
+
+function isCappedOptionRangeParam(toolName: string | undefined, paramName: string): boolean {
+  return (
+    paramName === "range" &&
+    (toolName === "get_options_contracts" || toolName === "get_options_quotes")
+  );
+}
+
+function optionRangeDescription(description: string | undefined): string {
+  const base = description?.trim() || "";
+  if (base.includes(OPTION_RANGE_CAP_TEXT)) return base;
+  return base ? `${base} ${OPTION_RANGE_CAP_TEXT}` : OPTION_RANGE_CAP_TEXT;
+}
+
+function optionRangeSchemaWithoutRejectingMaximum(schema: any): any {
+  const { maximum: _maximum, ...rest } = schema || {};
+  return rest;
 }
 
 function collectParams(
@@ -288,7 +308,12 @@ function collectParams(
     if (!param.name || seen.has(param.name)) continue;
     seen.add(param.name);
 
-    let zodExpr = schemaToZod(param.schema || {}, param.description);
+    let zodExpr = isCappedOptionRangeParam(toolName, param.name)
+      ? schemaToZod(
+          optionRangeSchemaWithoutRejectingMaximum(param.schema),
+          optionRangeDescription(param.description),
+        )
+      : schemaToZod(param.schema || {}, param.description);
     if (toolName?.startsWith("screen_") && param.name === "max_range") {
       zodExpr = SCREENER_MAX_RANGE_ZOD;
     }
