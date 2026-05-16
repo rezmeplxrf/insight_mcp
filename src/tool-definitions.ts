@@ -154,7 +154,7 @@ export const toolDefinitions: ToolDefinition[] = [
     expiration: z.string().describe("(Optional) Exact expiration date. Ignored when from or to is provided. (Format: YYYY-MM-DD)").optional(),
     from: z.string().describe("(Optional) Minimum expiration date. When provided, expiration parameter is ignored. (Format: YYYY-MM-DD)").optional(),
     to: z.string().describe("(Optional) Maximum expiration date. When provided, expiration parameter is ignored. (Format: YYYY-MM-DD)").optional(),
-    range: z.number().int().min(1).max(1000).describe("(Optional) Strike price range as a percentage of the current underlying price. For example, range=10 returns only options with strikes within ±10% of the current price. Values above 1000 are capped at 1000. Ignored when strike is provided. If no strike, range, expiration, from, or to selector is provided, range=1000 is applied internally.").optional(),
+    range: z.number().int().min(1).max(1000).describe("(Optional) Strike price range as a percentage of the current underlying price. For example, range=10 returns only options with strikes within ±10% of the current price. Values above 1000 are capped at 1000. Ignored when strike is provided. If only code is provided, range=1000 is applied internally.").optional(),
     type: z.enum(["call", "put"]).describe("(Optional) Filter by option type.").optional(),
   },
   },
