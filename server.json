@@ -6,12 +6,12 @@
     "url": "https://github.com/rezmeplxrf/insight_mcp",
     "source": "github"
   },
-  "version": "1.4.21",
+  "version": "1.4.22",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@insightsentry/mcp",
-      "version": "1.4.21",
+      "version": "1.4.22",
       "transport": {
         "type": "stdio"
       },
