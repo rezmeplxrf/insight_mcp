@@ -98,6 +98,7 @@ Auth and files:
 |------|---------|
 | `whoami` | Print the configured user's `uuid`/email from the API key JWT |
 | `download_history` | Download date ranges to JSON/CSV files |
+| `get_symbol_history` | Same as `download_history`; downloads history to files |
 | `render_chart` | Render Chart.js configs as PNG images |
 
 Market data:
@@ -107,7 +108,6 @@ Market data:
 | `search_symbols` | Find valid `EXCHANGE:SYMBOL` codes |
 | `get_quotes` | Real-time quotes |
 | `get_symbol_series` | Recent OHLCV series |
-| `get_symbol_history` | Deep intraday history |
 | `get_symbol_info` | Symbol metadata |
 | `get_symbol_session` | Trading hours and session details |
 | `get_symbol_contracts` | Futures contract list |

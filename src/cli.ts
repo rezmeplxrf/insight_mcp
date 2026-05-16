@@ -44,6 +44,7 @@ import {
 export { coerceArgs } from "./arg-coercion.js";
 
 const DOWNLOAD_HISTORY_COMMAND = "download_history";
+const GET_SYMBOL_HISTORY_COMMAND = "get_symbol_history";
 const RENDER_CHART_COMMAND = "render_chart";
 const UPDATE_COMMAND = "update";
 const VERSION_COMMAND = "version";
@@ -159,11 +160,15 @@ export function buildHelp(): string {
   ];
 
   for (const tool of toolDefinitions) {
+    if (isHistoryDownloadCommand(tool.name)) continue;
     const desc = tool.description.split(".")[0]; // first sentence
     lines.push(`  ${tool.name.padEnd(32)} ${desc}`);
   }
   lines.push(
     `  ${DOWNLOAD_HISTORY_COMMAND.padEnd(32)} Download historical ranges to JSON/CSV files with concurrency and progress`,
+  );
+  lines.push(
+    `  ${GET_SYMBOL_HISTORY_COMMAND.padEnd(32)} Same as download_history; downloads history to files`,
   );
   lines.push(`  ${RENDER_CHART_COMMAND.padEnd(32)} Render Chart.js configs as PNG images`);
 
@@ -199,9 +204,9 @@ export function buildHelp(): string {
   return lines.join("\n");
 }
 
-export function buildDownloadHistoryHelp(): string {
+export function buildDownloadHistoryHelp(commandName = DOWNLOAD_HISTORY_COMMAND): string {
   return [
-    `insight ${DOWNLOAD_HISTORY_COMMAND}`,
+    `insight ${commandName}`,
     "",
     "Download historical bars to local JSON or CSV files. Intraday bars use /history; day/week/month use /series. Continuous futures ending in 1! or 2! expand to contract codes for intraday bars.",
     "",
@@ -225,9 +230,9 @@ export function buildDownloadHistoryHelp(): string {
     "  --settlement               boolean [optional] Use settlement as daily close. Default: false.",
     "",
     "Examples:",
-    '  insight download_history --symbol "NASDAQ:AAPL" --bar_type minute --from 2024-01 --to 2024-06 --output_dir ./history --format csv --merge',
-    '  insight download_history --symbol "NASDAQ:AAPL" --bar_type second --from 2024-06-01 --to 2024-06-14 --output_dir ./history --concurrency 5',
-    '  insight download_history --symbol "CME_MINI:NQ1!" --bar_type hour --from 2025-01 --to 2025-12 --output_dir ./futures --format both',
+    `  insight ${commandName} --symbol "NASDAQ:AAPL" --bar_type minute --from 2024-01 --to 2024-06 --output_dir ./history --format csv --merge`,
+    `  insight ${commandName} --symbol "NASDAQ:AAPL" --bar_type second --from 2024-06-01 --to 2024-06-14 --output_dir ./history --concurrency 5`,
+    `  insight ${commandName} --symbol "CME_MINI:NQ1!" --bar_type hour --from 2025-01 --to 2025-12 --output_dir ./futures --format both`,
   ].join("\n");
 }
 
@@ -265,8 +270,8 @@ const toolExamples: Record<string, string[]> = {
     `insight get_symbol_series --symbol "NASDAQ:AAPL" --bar_type day --dp 30 --filter '{ "last_close": series[-1].close, "avg_vol": $average(series.volume) }'`,
   ],
   get_symbol_history: [
-    'insight get_symbol_history --symbol "NASDAQ:AAPL" --bar_type minute --start_date "2025-01"',
-    'insight get_symbol_history --symbol "NASDAQ:AAPL" --bar_type hour --start_date "2025-06" --bar_interval 4',
+    'insight get_symbol_history --symbol "NASDAQ:AAPL" --bar_type minute --from 2025-01 --to 2025-06 --output_dir ./history',
+    'insight get_symbol_history --symbol "NASDAQ:AAPL" --bar_type hour --from 2025-06 --to 2025-06 --output_dir ./history --bar_interval 4',
   ],
   get_symbol_contracts: ['insight get_symbol_contracts --symbol "CME_MINI:NQ1!"'],
   get_symbol_info: [
@@ -554,9 +559,9 @@ async function runCliInner(argv: string[], io: CliIO): Promise<void> {
     return;
   }
 
-  if (toolName === DOWNLOAD_HISTORY_COMMAND) {
+  if (isHistoryDownloadCommand(toolName)) {
     if (help) {
-      io.write(buildDownloadHistoryHelp());
+      io.write(buildDownloadHistoryHelp(toolName));
       io.exit(0);
       return;
     }
@@ -582,7 +587,7 @@ async function runCliInner(argv: string[], io: CliIO): Promise<void> {
       const historyArgs = await resolveDownloadHistoryArgs(inputArgs, io);
       if (!historyArgs) {
         io.write(
-          `Error: Missing required options for download_history: ${missingDownloadHistoryArgs(inputArgs).join(", ")}\n\nRun: insight download_history --help`,
+          `Error: Missing required options for ${toolName}: ${missingDownloadHistoryArgs(inputArgs).join(", ")}\n\nRun: insight ${toolName} --help`,
         );
         io.exit(1);
         return;
@@ -887,19 +892,29 @@ async function defaultRunCommand(
 
 function interactiveToolOptions(): ToolSelectionOption[] {
   return [
-    ...toolDefinitions.map((tool) => ({
-      name: tool.name,
-      description: summarizeToolDescription(tool.description),
-    })),
+    ...toolDefinitions
+      .filter((tool) => !isHistoryDownloadCommand(tool.name))
+      .map((tool) => ({
+        name: tool.name,
+        description: summarizeToolDescription(tool.description),
+      })),
     {
       name: DOWNLOAD_HISTORY_COMMAND,
       description: "Download historical ranges to JSON/CSV files",
+    },
+    {
+      name: GET_SYMBOL_HISTORY_COMMAND,
+      description: "Same as download_history; downloads history to files",
     },
     {
       name: RENDER_CHART_COMMAND,
       description: "Render Chart.js configs as PNG images",
     },
   ];
+}
+
+function isHistoryDownloadCommand(toolName: string): boolean {
+  return toolName === DOWNLOAD_HISTORY_COMMAND || toolName === GET_SYMBOL_HISTORY_COMMAND;
 }
 
 function buildInteractiveToolList(options: ToolSelectionOption[]): string {

@@ -69,8 +69,7 @@ Call \`whoami\` to check whether this MCP server has an InsightSentry API key co
 - \`get_events\` — Economic events calendar
 
 ### "Deep historical / futures data"
-- \`get_symbol_history\` — 20+ years of data (requires start_date: YYYY-MM-DD for second bars returns one day, YYYY-MM for minute/hour bars returns one month)
-- \`download_history\` — Ranged history downloader that saves JSON/CSV files locally, expands second bars into daily /history requests, minute/hour into monthly /history requests, uses /series for day/week/month, and auto-expands continuous futures ending in 1! or 2! through contracts for second/minute/hour.
+- \`get_symbol_history\` / \`download_history\` — Ranged history downloader that saves JSON/CSV files locally, expands second bars into daily /history requests, minute/hour into monthly /history requests, uses /series for day/week/month, and auto-expands continuous futures ending in 1! or 2! through contracts for second/minute/hour.
 - \`get_symbol_contracts\` — List futures contracts with settlement dates
 - For extensive futures history, use specific contract codes (e.g., CME_MINI:NQH2024), not continuous (CME_MINI:NQ1!)
 
@@ -105,7 +104,7 @@ Read the documentation resources for endpoint details and examples:
 - **WebSocket**: For real-time streaming, read the websocket resource. Two endpoints: /live (market data) and /newsfeed (news).
 
 ## Handling Large Responses — Use \`filter\` (JSONata)
-API responses can be large (e.g., 30k bars of time series, hundreds of fundamental fields, full screener pages). **Every tool supports an optional \`filter\` parameter** that accepts a [JSONata](https://jsonata.org) expression. The filter is applied server-side before the response reaches you, so you only receive the data you need.
+API responses can be large (e.g., 30k bars of time series, hundreds of fundamental fields, full screener pages). API data tools support an optional \`filter\` parameter that accepts a [JSONata](https://jsonata.org) expression. The filter is applied server-side before the response reaches you, so you only receive the data you need. Downloader tools such as \`get_symbol_history\` and \`download_history\` save data to files and do not use \`filter\`.
 
 **Always use \`filter\` when you don't need the full response.** Only omit it when the user explicitly asks for raw data or when debugging.
 
@@ -147,10 +146,10 @@ Screener fields are limited to 10 per request — pick the most relevant ones an
 
 ## Charting with \`render_chart\`
 
-Use \`render_chart\` to visualize data as PNG images. It accepts a full [Chart.js](https://www.chartjs.org/docs/) configuration as a JSON string. Combine with \`get_symbol_series\` or \`get_symbol_history\` using \`filter\` to extract chart-ready arrays.
+Use \`render_chart\` to visualize data as PNG images. It accepts a full [Chart.js](https://www.chartjs.org/docs/) configuration as a JSON string. Combine with \`get_symbol_series\` using \`filter\` to extract chart-ready arrays.
 
 ### Series response format
-\`get_symbol_series\` and \`get_symbol_history\` return:
+\`get_symbol_series\` returns:
 \`\`\`json
 { "code": "NASDAQ:AAPL", "bar_type": "1d", "series": [{ "time": 1733432340, "open": 242.89, "high": 243.09, "low": 242.82, "close": 243.08, "volume": 533779 }, ...] }
 \`\`\`
@@ -177,10 +176,6 @@ Chart.js doesn't have a native candlestick type, but you can approximate with fl
 \`get_symbol_series({ symbol: "NASDAQ:AAPL", bar_type: "day", dp: 20, filter: "{ "labels": series.$fromMillis(time * 1000, "[M01]/[D01]"), "open": series.open, "close": series.close, "high": series.high, "low": series.low }" })\`
 Use the \`open\` and \`close\` arrays as \`[low, high]\` pairs in a floating bar dataset, with color conditional on open vs close.
 
-### Example: Intraday chart from history
-\`get_symbol_history({ symbol: "NASDAQ:AAPL", bar_type: "minute", bar_interval: 5, start_date: "2026-03", filter: "{ "labels": series.$fromMillis(time * 1000, "[H01]:[m01]"), "close": series.close }" })\`
-Then pass labels and close arrays to \`render_chart\` as a line chart.
-
 ### Tips
 - Use \`filter\` with \`$fromMillis(time * 1000, "[pattern]")\` to format Unix timestamps as readable labels. The \`time\` field is in seconds — multiply by 1000 for milliseconds.
 - Set \`pointRadius: 0\` on line charts with many data points for cleaner output.
@@ -190,6 +185,7 @@ Then pass labels and close arrays to \`render_chart\` as a line chart.
 `;
 
 const { apiKey } = resolveApiKeyWithSource();
+const HISTORY_DOWNLOAD_TOOL_NAMES = new Set(["download_history", "get_symbol_history"]);
 
 let client: ApiClient | null = null;
 let apiKeyError: string | null = null;
@@ -254,6 +250,8 @@ server.registerTool(
 
 // Register all API tools with Zod schemas for type-safe parameter validation
 for (const tool of toolDefinitions) {
+  if (HISTORY_DOWNLOAD_TOOL_NAMES.has(tool.name)) continue;
+
   const schema = {
     ...flexibleInputSchema(tool.schema),
     filter: z
@@ -314,58 +312,60 @@ for (const tool of toolDefinitions) {
   );
 }
 
-// Register ranged history downloader tool
-server.registerTool(
-  "download_history",
-  {
-    description:
-      "Download historical data over a from/to date range and save files locally as JSON, CSV, or both. second bars create one /history request per day, minute/hour bars create one /history request per month, and day/week/month bars use one /series request with dp=30000 and date filtering. Continuous futures ending in 1! or 2! are detected automatically and expanded to specific contract codes for second/minute/hour. Shows progress in the final summary and supports concurrency 1-10, default 5.",
-    inputSchema: flexibleInputSchema(downloadHistorySchema),
-  },
-  async (args: any) => {
-    if (!client) {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Error: ${apiKeyError}`,
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    try {
-      const symbolValidationError = validateSymbolLikeArgs(args);
-      if (symbolValidationError) {
-        throw new Error(`Invalid ${symbolValidationError.key}: ${symbolValidationError.error}`);
+// Register ranged history downloader tools.
+for (const toolName of HISTORY_DOWNLOAD_TOOL_NAMES) {
+  server.registerTool(
+    toolName,
+    {
+      description:
+        "Download historical data over a from/to date range and save files locally as JSON, CSV, or both. second bars create one /history request per day, minute/hour bars create one /history request per month, and day/week/month bars use one /series request with dp=30000 and date filtering. Continuous futures ending in 1! or 2! are detected automatically and expanded to specific contract codes for second/minute/hour. Shows progress in the final summary and supports concurrency 1-10, default 5.",
+      inputSchema: flexibleInputSchema(downloadHistorySchema),
+    },
+    async (args: any) => {
+      if (!client) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error: ${apiKeyError}`,
+            },
+          ],
+          isError: true,
+        };
       }
-      const activeClient = client;
-      const progress: string[] = [];
-      const result = await downloadHistory(args, {
-        request: (method, path, params) => activeClient.request(method, path, params),
-        onProgress: (event) => {
-          progress.push(
-            `[${event.completed}/${event.total}] ${event.status} ${event.symbol} ${event.start_date}`,
-          );
-        },
-      });
-      return {
-        content: await withUpgradeNotice([
-          {
-            type: "text" as const,
-            text: JSON.stringify({ ...result, progress }, null, 2),
+
+      try {
+        const symbolValidationError = validateSymbolLikeArgs(args);
+        if (symbolValidationError) {
+          throw new Error(`Invalid ${symbolValidationError.key}: ${symbolValidationError.error}`);
+        }
+        const activeClient = client;
+        const progress: string[] = [];
+        const result = await downloadHistory(args, {
+          request: (method, path, params) => activeClient.request(method, path, params),
+          onProgress: (event) => {
+            progress.push(
+              `[${event.completed}/${event.total}] ${event.status} ${event.symbol} ${event.start_date}`,
+            );
           },
-        ]),
-      };
-    } catch (error: any) {
-      return {
-        content: [{ type: "text" as const, text: `Error: ${error.message}` }],
-        isError: true,
-      };
-    }
-  },
-);
+        });
+        return {
+          content: await withUpgradeNotice([
+            {
+              type: "text" as const,
+              text: JSON.stringify({ ...result, progress }, null, 2),
+            },
+          ]),
+        };
+      } catch (error: any) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+}
 
 // Register chart rendering tool
 server.registerTool(
