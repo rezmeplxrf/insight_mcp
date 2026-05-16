@@ -270,6 +270,9 @@ const SCREENER_MAX_RANGE_ZOD =
   'z.number().int().describe("Number of screener results returned per page. The API gateway clamps values below 1000 to 1000 and values above 15000 to 15000.")';
 
 const OPTION_RANGE_CAP_TEXT = "Values above 1000 are capped at 1000.";
+const OPTION_SELECTOR_DEFAULT_TEXT =
+  "If no strike, range, expiration, from, or to selector is provided, range=1000 is applied internally.";
+const STALE_OPTION_CODE_ONLY_TEXT = "If only code is provided, range=1000 is applied internally.";
 
 interface ParamInfo {
   name: string;
@@ -286,13 +289,18 @@ function isCappedOptionRangeParam(toolName: string | undefined, paramName: strin
 
 function optionRangeDescription(description: string | undefined): string {
   const base = description?.trim() || "";
-  if (base.includes(OPTION_RANGE_CAP_TEXT)) return base;
-  return base ? `${base} ${OPTION_RANGE_CAP_TEXT}` : OPTION_RANGE_CAP_TEXT;
+  const normalized = normalizeOptionSelectorDefaultText(base);
+  if (normalized.includes(OPTION_RANGE_CAP_TEXT)) return normalized;
+  return normalized ? `${normalized} ${OPTION_RANGE_CAP_TEXT}` : OPTION_RANGE_CAP_TEXT;
 }
 
 function optionRangeSchemaWithoutRejectingMaximum(schema: any): any {
   const { maximum: _maximum, ...rest } = schema || {};
   return rest;
+}
+
+function normalizeOptionSelectorDefaultText(description: string): string {
+  return description.replaceAll(STALE_OPTION_CODE_ONLY_TEXT, OPTION_SELECTOR_DEFAULT_TEXT);
 }
 
 function collectParams(
@@ -397,7 +405,9 @@ async function generate(): Promise<void> {
         continue;
       }
 
-      const baseDesc = [operation.summary, operation.description].filter(Boolean).join(". ");
+      const baseDesc = normalizeOptionSelectorDefaultText(
+        [operation.summary, operation.description].filter(Boolean).join(". "),
+      );
       let hint = WORKFLOW_HINTS[toolName] || "";
 
       // Inject request body example from OpenAPI spec if {{EXAMPLE}} placeholder exists
