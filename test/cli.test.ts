@@ -951,7 +951,7 @@ describe("runCli", () => {
     assert.ok(!questions.some((question) => question.startsWith("Range")));
   });
 
-  it("requires range interactively when other option quote selectors are skipped", async () => {
+  it("accepts optional range interactively after other option quote selectors are skipped", async () => {
     const questions: string[] = [];
     const mockRequest = async (
       _method: string,
@@ -978,7 +978,7 @@ describe("runCli", () => {
     assert.ok(questions.some((question) => question.startsWith("From")));
     assert.ok(questions.some((question) => question.startsWith("To")));
     assert.ok(
-      questions.some((question) => question.startsWith("Range") && question.includes("required")),
+      questions.some((question) => question.startsWith("Range") && question.includes("optional")),
     );
     assert.ok(!output.includes("Invalid Strike"));
   });
@@ -1280,18 +1280,17 @@ describe("runCli", () => {
     assert.equal(exitCode, 1);
   });
 
-  it("reports dynamic option requirements clearly when interactive prompts are left blank", async () => {
+  it("allows option quote requests with only code when interactive prompts are left blank", async () => {
     await runCli(["get_options_quotes", "--code", "NASDAQ:AAPL"], {
       write,
       exit,
-      request: async () => assert.fail("missing quote selector should fail before request"),
+      request: async (_method, _pathTemplate, params) => params,
       isInteractive: true,
       prompt: async () => "",
     });
 
-    assert.ok(output.includes("Missing required options for get_options_quotes"));
-    assert.ok(output.includes("strike, range, expiration, from, or to"));
-    assert.equal(exitCode, 1);
+    assert.deepEqual(JSON.parse(output), { code: "NASDAQ:AAPL" });
+    assert.equal(exitCode, undefined);
   });
 
   it("validates provided tool arguments before calling the API", async () => {
@@ -1442,20 +1441,15 @@ describe("runCli", () => {
     assert.equal(exitCode, 1);
   });
 
-  it("validates missing option quote selectors before calling the API", async () => {
+  it("allows option quote requests with only code before calling the API", async () => {
     await runCli(["get_options_quotes", "--code", "NASDAQ:AAPL"], {
       write,
       exit,
-      request: async () => assert.fail("missing quote selector should fail before request"),
+      request: async (_method, _pathTemplate, params) => params,
     });
 
-    assert.ok(output.includes("Invalid Selector"));
-    assert.ok(output.includes("strike"));
-    assert.ok(output.includes("range"));
-    assert.ok(output.includes("expiration"));
-    assert.ok(output.includes("from"));
-    assert.ok(output.includes("to"));
-    assert.equal(exitCode, 1);
+    assert.deepEqual(JSON.parse(output), { code: "NASDAQ:AAPL" });
+    assert.equal(exitCode, undefined);
   });
 
   it("reprompts when an interactive tool argument is invalid", async () => {

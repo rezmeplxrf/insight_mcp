@@ -290,6 +290,7 @@ const toolExamples: Record<string, string[]> = {
     'insight get_options_contracts --code "NASDAQ:AAPL" --from "2026-06-01" --to "2026-12-31"',
   ],
   get_options_quotes: [
+    'insight get_options_quotes --code "NASDAQ:AAPL"',
     'insight get_options_quotes --code "NASDAQ:AAPL" --expiration "2026-06-19" --type call',
     'insight get_options_quotes --code "NASDAQ:AAPL" --range 5 --sortBy delta --sort desc',
   ],
@@ -705,9 +706,7 @@ async function runCliInner(argv: string[], io: CliIO): Promise<void> {
       delete inputArgs[error.key];
     }
   } else {
-    const providedValidationError = validateResolvedToolArgs(inputArgs, tool, {
-      validateConditionalRequirements: false,
-    });
+    const providedValidationError = validateResolvedToolArgs(inputArgs, tool);
     if (providedValidationError) {
       io.write(
         `Invalid ${toolPromptLabel(providedValidationError.key)}: ${providedValidationError.error}\n`,
@@ -1060,7 +1059,7 @@ function missingToolArgs(args: Record<string, string>, tool: ToolDefinition): st
 }
 
 function missingRequiredToolArgs(args: Record<string, string>, tool: ToolDefinition): string[] {
-  return [...missingToolArgs(args, tool), ...missingConditionalToolArgs(tool.name, args)];
+  return missingToolArgs(args, tool);
 }
 
 async function resolveToolArgs(
@@ -1075,9 +1074,7 @@ async function resolveToolArgs(
       if (isOptionalZodType(zodType) && !shouldPromptSymbolScopedParam(key, resolved)) continue;
       if (isOptionalZodType(zodType)) {
         if (shouldSkipInteractiveToolArg(tool.name, key, resolved)) continue;
-        const answer = isInteractiveToolArgRequired(tool.name, key, resolved)
-          ? await promptForToolArg(key, zodType, io)
-          : await promptForOptionalToolArg(key, zodType, io);
+        const answer = await promptForOptionalToolArg(key, zodType, io);
         if (answer === null) return null;
         if (answer !== undefined) resolved[key] = answer;
       } else {
@@ -1150,18 +1147,6 @@ function shouldSkipInteractiveToolArg(
 
   if (toolName === "get_options_quotes" && isOptionQuoteSelector(key)) {
     return hasAnyOptionQuoteSelector(args);
-  }
-
-  return false;
-}
-
-function isInteractiveToolArgRequired(
-  toolName: string,
-  key: string,
-  args: Record<string, string>,
-): boolean {
-  if (toolName === "get_options_quotes") {
-    return key === "range" && !hasAnyOptionQuoteSelector(args);
   }
 
   return false;
@@ -1381,16 +1366,11 @@ function validateToolArgAnswer(key: string, zodType: z.ZodTypeAny, answer: strin
 function validateResolvedToolArgs(
   args: Record<string, string>,
   tool: ToolDefinition,
-  options: { validateConditionalRequirements?: boolean } = {},
 ): { key: string; error: string } | null {
   for (const [key, zodType] of Object.entries(tool.schema)) {
     if (args[key] === undefined) continue;
     const error = validateToolArgAnswer(key, zodType, args[key]);
     if (error) return { key, error };
-  }
-  if (options.validateConditionalRequirements !== false) {
-    const conditionalError = validateConditionalToolArgs(tool.name, args);
-    if (conditionalError) return conditionalError;
   }
   const historyIntervalError = validateHistoryIntervalArgs(tool.name, args);
   if (historyIntervalError) return historyIntervalError;
@@ -1414,23 +1394,6 @@ function collectInvalidProvidedToolArgs(
   }
 
   return errors;
-}
-
-function validateConditionalToolArgs(
-  toolName: string,
-  args: Record<string, string>,
-): { key: string; error: string } | null {
-  const missing = missingConditionalToolArgs(toolName, args);
-  if (missing.length === 0) return null;
-  return { key: "selector", error: `provide ${missing.join(", ")}` };
-}
-
-function missingConditionalToolArgs(toolName: string, args: Record<string, string>): string[] {
-  if (toolName === "get_options_quotes" && !hasAnyOptionQuoteSelector(args)) {
-    return ["strike, range, expiration, from, or to"];
-  }
-
-  return [];
 }
 
 function isOptionQuoteSelector(key: string): boolean {

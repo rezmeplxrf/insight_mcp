@@ -56,7 +56,7 @@ Call \`whoami\` to check whether this MCP server has an InsightSentry API key co
 ### "Options analysis"
 1. \`search_symbols\` — Find the underlying
 2. \`get_options_contracts\` — Get available option contract metadata and codes. Narrow with API params: \`type\` (call/put), \`strike\`, \`range\` (strike ±N% of price), \`expiration\`, or \`from\`/\`to\` (expiration date range).
-3. \`get_options_quotes\` — Get filtered option quote rows with bid/ask and Greeks (delta, gamma, theta, vega, IV). Provide at least one selector: \`strike\`, \`range\`, \`expiration\`, \`from\`, or \`to\`. Use \`sortBy\`/\`sort\` to narrow at the API level, then \`filter\` to refine by Greeks.
+3. \`get_options_quotes\` — Get option quote rows with bid/ask and Greeks (delta, gamma, theta, vega, IV). Use \`strike\`, \`range\`, \`expiration\`, \`from\`, or \`to\` to narrow results. If only \`code\` is provided, the API applies \`range=1000\` internally. Use \`sortBy\`/\`sort\` to narrow at the API level, then \`filter\` to refine by Greeks.
 4. \`get_quotes\` — Latest trade price, volume, and top-of-book quote data for specific option codes (use the OPRA:... or futures option code)
 5. \`get_symbol_series\` — Historical option price data (Only available for OPRA)
 

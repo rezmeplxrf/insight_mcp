@@ -60,10 +60,6 @@ export async function runApiTool(options: RunApiToolOptions): Promise<any> {
   if (historyIntervalError) {
     throw new Error(`Invalid ${historyIntervalError.key}: ${historyIntervalError.error}`);
   }
-  const conditionalArgsError = validateConditionalApiToolArgs(options.toolName, apiArgs);
-  if (conditionalArgsError) {
-    throw new Error(`Invalid ${conditionalArgsError.key}: ${conditionalArgsError.error}`);
-  }
   await validateResponseStorageTarget(storeOptions);
   const result = await options.request(options.method, options.pathTemplate, apiArgs);
   const stored = await storeResponse(result, storeOptions);
@@ -85,32 +81,6 @@ export async function runApiTool(options: RunApiToolOptions): Promise<any> {
   }
 
   return stored ?? result;
-}
-
-function validateConditionalApiToolArgs(
-  toolName: string,
-  args: Record<string, any>,
-): { key: string; error: string } | null {
-  if (toolName === "get_options_quotes" && !hasAnyOptionQuoteSelector(args)) {
-    return { key: "selector", error: "provide strike, range, expiration, from, or to" };
-  }
-
-  return null;
-}
-
-function hasAnyOptionQuoteSelector(args: Record<string, any>): boolean {
-  return (
-    hasArgValue(args.strike) ||
-    hasArgValue(args.range) ||
-    hasArgValue(args.expiration) ||
-    hasArgValue(args.from) ||
-    hasArgValue(args.to)
-  );
-}
-
-function hasArgValue(value: unknown): boolean {
-  if (value === null || value === undefined) return false;
-  return typeof value !== "string" || value.trim().length > 0;
 }
 
 function isEmptyFilteredResult(value: unknown): boolean {

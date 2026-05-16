@@ -304,21 +304,18 @@ describe("tool runner", () => {
     );
   });
 
-  it("rejects option quote requests without a selector before calling the API", async () => {
-    const request: ApiToolRequestFn = async () =>
-      assert.fail("missing quote selector should fail before request");
+  it("allows option quote requests with only code", async () => {
+    const request: ApiToolRequestFn = async (_method, _pathTemplate, params) => params;
 
-    await assert.rejects(
-      () =>
-        runApiTool({
-          toolName: "get_options_quotes",
-          method: "GET",
-          pathTemplate: "/options/quotes",
-          args: { code: "NASDAQ:AAPL" },
-          request,
-        }),
-      /Invalid selector: provide strike, range, expiration, from, or to/,
-    );
+    const result = await runApiTool({
+      toolName: "get_options_quotes",
+      method: "GET",
+      pathTemplate: "/options/quotes",
+      args: { code: "NASDAQ:AAPL" },
+      request,
+    });
+
+    assert.deepEqual(result, { code: "NASDAQ:AAPL" });
   });
 
   it("rejects history bar intervals unsupported by the selected bar type before request", async () => {
