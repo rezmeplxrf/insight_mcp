@@ -3,6 +3,8 @@ const HISTORY_PLAN_NAMES = new Set(["ultra", "mega", "enterprise"]);
 const TICK_SERIES_PLAN_NAMES = new Set(["mega", "enterprise"]);
 const DEFAULT_RETRY_DELAYS_MS = [500, 1000] as const;
 const HISTORY_RATE_LIMIT_RETRY_DELAY_MS = 60_000;
+const HISTORY_CONCURRENCY_MAX_RETRIES = 5;
+const RETRYABLE_TERMINAL_STATUSES = new Set([408, 429]);
 
 // Symbol code must be EXCHANGE:SYMBOL format (e.g., NASDAQ:AAPL)
 const SYMBOL_CODE_PATTERN = /^[A-Z0-9_./-]+:[A-Z0-9_./!-]+$/;
@@ -26,7 +28,9 @@ export class ApiError extends Error {
   }
 
   get terminal(): boolean {
-    return this.status >= 400 && this.status <= 499;
+    return (
+      this.status >= 400 && this.status <= 499 && !RETRYABLE_TERMINAL_STATUSES.has(this.status)
+    );
   }
 }
 
@@ -115,7 +119,7 @@ export function isTerminalApiError(error: unknown): boolean {
   if (error instanceof ApiError) return error.terminal;
   const message = error instanceof Error ? error.message : String(error);
   const status = Number(/API error \((\d{3})\):/.exec(message)?.[1]);
-  return status >= 400 && status <= 499;
+  return status >= 400 && status <= 499 && !RETRYABLE_TERMINAL_STATUSES.has(status);
 }
 
 async function apiErrorFromResponse(response: Response): Promise<ApiError> {
@@ -132,6 +136,17 @@ async function apiErrorFromResponse(response: Response): Promise<ApiError> {
 
 function sleep(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function isRetryableHistoryRateLimitMessage(message: string): boolean {
+  return message === "Rate limit exceeded";
+}
+
+function isHistoryConcurrencyMessage(message: string): boolean {
+  return (
+    message.includes("maximum number of concurrent history requests") ||
+    message.includes("too many pending history requests queued")
+  );
 }
 
 export class ApiClient {
@@ -233,11 +248,24 @@ export class ApiClient {
       await this.sleep(retryDelay);
       return true;
     }
+    if (isHistoryEndpoint(pathTemplate) && error.status === 408 && retryDelay !== undefined) {
+      await this.sleep(retryDelay);
+      return true;
+    }
+    if (
+      isHistoryEndpoint(pathTemplate) &&
+      error.status === 429 &&
+      isHistoryConcurrencyMessage(error.apiMessage) &&
+      attempt < HISTORY_CONCURRENCY_MAX_RETRIES
+    ) {
+      await this.sleep(this.historyRateLimitRetryDelayMs * 2 ** attempt);
+      return true;
+    }
     if (
       attempt === 0 &&
       isHistoryEndpoint(pathTemplate) &&
       error.status === 429 &&
-      error.apiMessage === "Rate limit exceeded"
+      isRetryableHistoryRateLimitMessage(error.apiMessage)
     ) {
       await this.waitForHistoryRateLimitPause();
       return true;

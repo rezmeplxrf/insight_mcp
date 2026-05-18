@@ -145,6 +145,8 @@ describe("ApiClient", () => {
   it("classifies 4xx API errors as terminal and 5xx API errors as retryable", async () => {
     assert.equal(isTerminalApiError(new Error("API error (400): Bad Request")), true);
     assert.equal(isTerminalApiError(new Error("API error (403): Forbidden")), true);
+    assert.equal(isTerminalApiError(new Error("API error (408): Request Timeout")), false);
+    assert.equal(isTerminalApiError(new Error("API error (429): Too Many Requests")), false);
     assert.equal(isTerminalApiError(new Error("API error (500): Internal Server Error")), false);
     assert.equal(isTerminalApiError(new Error("API error (503): Service Unavailable")), false);
   });
@@ -264,6 +266,121 @@ describe("ApiClient", () => {
     );
     assert.equal(calls, 2);
     assert.deepEqual(delays, [60_000]);
+  });
+
+  it("retries /history request timeouts with normal backoff", async () => {
+    let calls = 0;
+    const delays: number[] = [];
+    globalThis.fetch = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(
+          JSON.stringify({ message: "Request Timeout. Please try again later" }),
+          {
+            status: 408,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+      sleep: async (delayMs) => {
+        delays.push(delayMs);
+      },
+    });
+
+    assert.deepEqual(
+      await client.request("GET", "/v3/symbols/{symbol}/history", {
+        symbol: "NASDAQ:AAPL",
+        bar_type: "minute",
+        start_date: "2026-01",
+      }),
+      { ok: true },
+    );
+    assert.equal(calls, 2);
+    assert.deepEqual(delays, [500]);
+  });
+
+  it("retries /history archive concurrency 429 responses with exponential long delays", async () => {
+    let calls = 0;
+    const delays: number[] = [];
+    globalThis.fetch = async () => {
+      calls += 1;
+      if (calls <= 5) {
+        return new Response(
+          JSON.stringify({
+            message:
+              "You have reached the maximum number of concurrent history requests. Please wait for your current requests to complete.",
+          }),
+          {
+            status: 429,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+      sleep: async (delayMs) => {
+        delays.push(delayMs);
+      },
+    });
+
+    assert.deepEqual(
+      await client.request("GET", "/v3/symbols/{symbol}/history", {
+        symbol: "NASDAQ:AAPL",
+        bar_type: "minute",
+        start_date: "2026-01",
+      }),
+      { ok: true },
+    );
+    assert.equal(calls, 6);
+    assert.deepEqual(delays, [60_000, 120_000, 240_000, 480_000, 960_000]);
+  });
+
+  it("stops retrying /history archive concurrency 429 responses after five retries", async () => {
+    let calls = 0;
+    const delays: number[] = [];
+    globalThis.fetch = async () => {
+      calls += 1;
+      return new Response(
+        JSON.stringify({
+          message:
+            "You have too many pending history requests queued. Please wait for your current requests to complete.",
+        }),
+        {
+          status: 429,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    };
+
+    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+      sleep: async (delayMs) => {
+        delays.push(delayMs);
+      },
+    });
+
+    await assert.rejects(
+      () =>
+        client.request("GET", "/v3/symbols/{symbol}/history", {
+          symbol: "NASDAQ:AAPL",
+          bar_type: "minute",
+          start_date: "2026-01",
+        }),
+      /API error \(429\): You have too many pending history requests queued/,
+    );
+    assert.equal(calls, 6);
+    assert.deepEqual(delays, [60_000, 120_000, 240_000, 480_000, 960_000]);
   });
 
   it("shares one /history rate-limit pause across concurrent requests", async () => {
