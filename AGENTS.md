@@ -38,6 +38,12 @@ This package is both a CLI and an MCP server. Default to a user-friendly product
 - If CLI and MCP share behavior, implement it in shared production code and test that shared path.
 - MCP failures should be useful to the caller: include the cause and the exact parameter to fix.
 
+## Website Playground Sync
+
+- The public website API playground advertises this package through its `Tool` tab. When changing CLI/MCP tool names, command syntax, supported parameters, generated tool definitions, authentication behavior, or install/setup flow, update the website playground and related docs in the same change.
+- Primary website files to check: `../website/src/app/demo/restapi/rest-api-client.tsx`, `../website/src/app/docs/mcp/page.tsx`, and any landing-page copy that mentions the InsightSentry Tool.
+- Keep the playground wording aligned with the product model: this is one InsightSentry Tool package with CLI and MCP usage modes, not two separate products.
+
 ## Tests And Verification
 
 - Add tests for UX behavior, especially interactive prompts, re-prompts, ignored safe inputs, and non-interactive errors.
