@@ -330,8 +330,7 @@ describe("runCli", () => {
   });
 
   it("prompts for a tool when run interactively without arguments", async () => {
-    const selectedToolIndex =
-      toolDefinitions.findIndex((tool) => tool.name === "get_fundamentals_meta") + 1;
+    const selectedTool = "get_fundamentals_meta";
     const questions: string[] = [];
 
     await runCli([], {
@@ -349,14 +348,14 @@ describe("runCli", () => {
       }),
       prompt: async (question) => {
         questions.push(question);
-        if (question.includes("Choose tool")) return String(selectedToolIndex);
+        if (question.includes("Choose tool")) return selectedTool;
         return "";
       },
       request: async () => ({ ok: true }),
     });
 
     assert.ok(output.includes("Choose a tool"));
-    assert.ok(output.includes(`${selectedToolIndex}. get_fundamentals_meta`));
+    assert.ok(output.includes("get_fundamentals_meta"));
     assert.ok(questions.some((question) => question.includes("Choose tool")));
     assert.deepEqual(JSON.parse(output.slice(output.lastIndexOf("{"))), { ok: true });
     assert.equal(exitCode, undefined);
@@ -391,8 +390,7 @@ describe("runCli", () => {
   });
 
   it("prompts for an API key before the no-args interactive tool picker", async () => {
-    const selectedToolIndex =
-      toolDefinitions.findIndex((tool) => tool.name === "get_fundamentals_meta") + 1;
+    const selectedTool = "get_fundamentals_meta";
     const apiKey = jwt({ uuid: "user@example.com", plan: "ultra" });
     const questions: string[] = [];
 
@@ -411,7 +409,7 @@ describe("runCli", () => {
       prompt: async (question) => {
         questions.push(question);
         if (question.includes("API key")) return apiKey;
-        if (question.includes("Choose tool")) return String(selectedToolIndex);
+        if (question.includes("Choose tool")) return selectedTool;
         return "";
       },
       request: async () => ({ ok: true }),
@@ -429,8 +427,7 @@ describe("runCli", () => {
 
   it("uses the prompted API key for the current no-args interactive run", async () => {
     const origKey = process.env.INSIGHTSENTRY_API_KEY;
-    const selectedToolIndex =
-      toolDefinitions.findIndex((tool) => tool.name === "get_fundamentals_meta") + 1;
+    const selectedTool = "get_fundamentals_meta";
     const apiKey = jwt({ uuid: "user@example.com", plan: "ultra" });
     let requestKey: string | undefined;
 
@@ -450,7 +447,7 @@ describe("runCli", () => {
         }),
         prompt: async (question) => {
           if (question.includes("API key")) return apiKey;
-          if (question.includes("Choose tool")) return String(selectedToolIndex);
+          if (question.includes("Choose tool")) return selectedTool;
           return "";
         },
         createRequestFromApiKey: (key) => {
@@ -829,7 +826,7 @@ describe("runCli", () => {
     assert.equal(exitCode, undefined);
   });
 
-  it("shows choices and schema hints for required interactive tool arguments", async () => {
+  it("shows choices and schema hints for interactive tool arguments", async () => {
     const questions: string[] = [];
     const mockRequest = async (
       _method: string,
@@ -837,7 +834,7 @@ describe("runCli", () => {
       params: Record<string, any>,
     ) => params;
 
-    await runCli(["get_symbol_history"], {
+    await runCli(["get_symbol_series"], {
       write,
       exit,
       request: mockRequest,
@@ -854,19 +851,18 @@ describe("runCli", () => {
     const parsed = JSON.parse(output);
     assert.equal(parsed.symbol, "NASDAQ:AAPL");
     assert.equal(parsed.bar_type, "minute");
-    assert.equal(parsed.start_date, "2024-01");
     assert.ok(
       questions.some(
         (question) =>
           question.includes("Bar Type: Bar type.") &&
-          question.includes("Bar Type (required, choices: second/minute/hour):"),
+          question.includes("Bar Type (optional, choices: tick/second/minute/hour/day/week/month"),
       ),
     );
     assert.ok(
       questions.some(
         (question) =>
-          question.includes("Start Date: Starting period in YYYY-MM format") &&
-          question.includes("Start Date (required):"),
+          question.includes("Symbol: Symbol in Exchange:Symbol format") &&
+          question.includes("Symbol (required):"),
       ),
     );
   });
@@ -1232,7 +1228,7 @@ describe("runCli", () => {
   it("reprompts invalid provided tool arguments when interactive", async () => {
     const questions: string[] = [];
 
-    await runCli(["get_symbol_history", "--symbol", "NASDAQ:AAPL", "--bar_type", "daily"], {
+    await runCli(["get_symbol_series", "--symbol", "NASDAQ:AAPL", "--bar_type", "daily"], {
       write,
       exit,
       request: async (_method, _pathTemplate, params) => params,
@@ -1240,14 +1236,12 @@ describe("runCli", () => {
       prompt: async (question) => {
         questions.push(question);
         if (question.startsWith("Bar Type")) return "minute";
-        if (question.startsWith("Start Date")) return "2024-01";
         return "";
       },
     });
 
     const parsed = JSON.parse(output.slice(output.indexOf("{")));
     assert.equal(parsed.bar_type, "minute");
-    assert.equal(parsed.start_date, "2024-01");
     assert.ok(output.includes("Invalid Bar Type"));
     assert.ok(questions.some((question) => question.startsWith("Bar Type")));
     assert.equal(exitCode, undefined);
@@ -1308,27 +1302,31 @@ describe("runCli", () => {
   });
 
   it("validates provided tool arguments before calling the API", async () => {
-    await runCli(["get_symbol_history", "--symbol", "NASDAQ:AAPL", "--bar_type", "daily"], {
+    await runCli(["get_symbol_series", "--symbol", "NASDAQ:AAPL", "--bar_type", "daily"], {
       write,
       exit,
       request: async () => assert.fail("invalid args should fail before request"),
     });
 
     assert.ok(output.includes("Invalid Bar Type"));
-    assert.ok(output.includes("second, minute, hour"));
+    assert.ok(output.includes("tick, second, minute, hour, day, week, month"));
     assert.equal(exitCode, 1);
   });
 
   it("validates history bar intervals before calling the API", async () => {
     await runCli(
       [
-        "get_symbol_history",
+        "download_history",
         "--symbol",
         "NASDAQ:AAPL",
         "--bar_type",
         "second",
-        "--start_date",
+        "--from",
         "2024-01-01",
+        "--to",
+        "2024-01-02",
+        "--output_dir",
+        "/tmp",
         "--bar_interval",
         "2",
       ],
@@ -1339,79 +1337,9 @@ describe("runCli", () => {
       },
     );
 
-    assert.ok(output.includes("Invalid Bar Interval"));
+    assert.ok(output.includes("Invalid Bar interval"));
     assert.ok(output.includes("1, 5, 10, 15, 30, 45"));
     assert.equal(exitCode, 1);
-  });
-
-  it("reprompts interactive tick series when the plan is below mega", async () => {
-    const origKey = process.env.INSIGHTSENTRY_API_KEY;
-    process.env.INSIGHTSENTRY_API_KEY = jwt({ uuid: "user@example.com", plan: "ultra" });
-    try {
-      const questions: string[] = [];
-      let requestedParams: Record<string, any> | undefined;
-
-      await runCli(
-        ["get_symbol_series", "--symbol", "NASDAQ:AAPL", "--bar_type", "tick", "--dp", "1"],
-        {
-          write,
-          exit,
-          isInteractive: true,
-          prompt: async (question) => {
-            questions.push(question);
-            if (question.startsWith("Bar Type")) return "day";
-            return "";
-          },
-          request: async (_method, _path, params) => {
-            requestedParams = params;
-            return { ok: true };
-          },
-        },
-      );
-
-      assert.ok(output.includes("Invalid Bar Type"));
-      assert.ok(output.includes("Mega or Enterprise plan"));
-      assert.ok(questions.some((question) => question.startsWith("Bar Type")));
-      assert.equal(requestedParams?.bar_type, "day");
-      assert.equal(exitCode, undefined);
-    } finally {
-      if (origKey === undefined) {
-        delete process.env.INSIGHTSENTRY_API_KEY;
-      } else {
-        process.env.INSIGHTSENTRY_API_KEY = origKey;
-      }
-    }
-  });
-
-  it("rejects non-interactive tick series before request when the plan is below mega", async () => {
-    const origKey = process.env.INSIGHTSENTRY_API_KEY;
-    process.env.INSIGHTSENTRY_API_KEY = jwt({ uuid: "user@example.com", plan: "ultra" });
-    try {
-      let called = false;
-
-      await runCli(
-        ["get_symbol_series", "--symbol", "NASDAQ:AAPL", "--bar_type", "tick", "--dp", "1"],
-        {
-          write,
-          exit,
-          request: async () => {
-            called = true;
-            return { ok: true };
-          },
-        },
-      );
-
-      assert.ok(output.includes("Invalid Bar Type"));
-      assert.ok(output.includes("Mega or Enterprise plan"));
-      assert.equal(called, false);
-      assert.equal(exitCode, 1);
-    } finally {
-      if (origKey === undefined) {
-        delete process.env.INSIGHTSENTRY_API_KEY;
-      } else {
-        process.env.INSIGHTSENTRY_API_KEY = origKey;
-      }
-    }
   });
 
   it("allows screener max_range values that the API gateway clamps", async () => {
@@ -1476,7 +1404,7 @@ describe("runCli", () => {
       bar_type: params.bar_type,
     });
 
-    await runCli(["get_symbol_history", "--symbol", "NASDAQ:AAPL", "--start_date", "2024-01"], {
+    await runCli(["get_symbol_series", "--symbol", "NASDAQ:AAPL"], {
       write,
       exit,
       request: mockRequest,
@@ -1485,7 +1413,7 @@ describe("runCli", () => {
     });
 
     assert.ok(output.includes("Invalid Bar Type"));
-    assert.ok(output.includes("second, minute, hour"));
+    assert.ok(output.includes("tick, second, minute, hour, day, week, month"));
     assert.ok(output.includes('"bar_type": "minute"'));
     assert.equal(exitCode, undefined);
   });
@@ -1638,29 +1566,18 @@ describe("runCli", () => {
         bar_type: "1m",
         series: [{ time: 1, close: 10 }],
       });
-      await runCli(
-        [
-          "get_symbol_history",
-          "--symbol",
-          "NASDAQ:AAPL",
-          "--bar_type",
-          "minute",
-          "--start_date",
-          "2024-01",
-        ],
-        {
-          write,
-          exit,
-          isInteractive: true,
-          prompt: async (question) => {
-            questions.push(question);
-            if (question.includes("Store")) return "csv";
-            if (question.includes("Output File")) return outputFile;
-            return "";
-          },
-          request: mockRequest,
+      await runCli(["get_symbol_series", "--symbol", "NASDAQ:AAPL", "--bar_type", "minute"], {
+        write,
+        exit,
+        isInteractive: true,
+        prompt: async (question) => {
+          questions.push(question);
+          if (question.includes("Store")) return "csv";
+          if (question.includes("Output File")) return outputFile;
+          return "";
         },
-      );
+        request: mockRequest,
+      });
 
       assert.ok(questions.some((question) => question.includes("choices: none/json/csv")));
       assert.deepEqual(JSON.parse(output), { stored_file: outputFile, format: "csv" });

@@ -79,69 +79,6 @@ describe("ApiClient", () => {
     assert.equal(fetchCalled, true);
   });
 
-  it("blocks tick /series requests before fetch for plans below mega", async () => {
-    let fetchCalled = false;
-    globalThis.fetch = async () => {
-      fetchCalled = true;
-      throw new Error("fetch should not be called");
-    };
-
-    for (const plan of ["pro", "ultra"]) {
-      const client = new ApiClient(jwt({ uuid: "user@example.com", plan }));
-
-      await assert.rejects(
-        () =>
-          client.request("GET", "/v3/symbols/{symbol}/series", {
-            symbol: "NASDAQ:AAPL",
-            bar_type: "tick",
-          }),
-        /\/series tick option requires a Mega or Enterprise plan/,
-      );
-    }
-    assert.equal(fetchCalled, false);
-  });
-
-  it("allows tick /series requests for mega and enterprise plans", async () => {
-    const requestedUrls: string[] = [];
-    globalThis.fetch = async (input) => {
-      requestedUrls.push(String(input));
-      return new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    };
-
-    for (const plan of ["mega", "enterprise"]) {
-      const client = new ApiClient(jwt({ uuid: "user@example.com", plan }));
-      await client.request("GET", "/v3/symbols/{symbol}/series", {
-        symbol: "NASDAQ:AAPL",
-        bar_type: "tick",
-      });
-    }
-
-    assert.equal(requestedUrls.length, 2);
-  });
-
-  it("does not require a mega plan for non-tick /series requests", async () => {
-    let fetchCalled = false;
-    globalThis.fetch = async () => {
-      fetchCalled = true;
-      return new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    };
-
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "ultra" }));
-
-    await client.request("GET", "/v3/symbols/{symbol}/series", {
-      symbol: "NASDAQ:AAPL",
-      bar_type: "day",
-    });
-
-    assert.equal(fetchCalled, true);
-  });
-
   it("classifies 4xx API errors as terminal and 5xx API errors as retryable", async () => {
     assert.equal(isTerminalApiError(new Error("API error (400): Bad Request")), true);
     assert.equal(isTerminalApiError(new Error("API error (403): Forbidden")), true);
