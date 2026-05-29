@@ -130,9 +130,10 @@ export async function downloadHistory(
   };
 
   let nextIndex = 0;
+  let terminalError: unknown = null;
 
   async function worker(): Promise<void> {
-    while (nextIndex < plan.requests.length) {
+    while (!terminalError && nextIndex < plan.requests.length) {
       const requestIndex = nextIndex;
       const request = plan.requests[requestIndex];
       nextIndex += 1;
@@ -237,7 +238,11 @@ export async function downloadHistory(
           files: savedFiles,
         });
       } catch (error: any) {
-        if (isTerminalApiError(error)) throw error;
+        if (isTerminalApiError(error)) {
+          terminalError = error;
+          nextIndex = plan.requests.length;
+          throw error;
+        }
 
         const message = error?.message ?? String(error);
         result.failed += 1;

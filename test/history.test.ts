@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
+import { ApiError } from "../src/api-client.js";
 import { downloadHistory, planHistoryRequests, responseToCsv } from "../src/history.js";
 
 function requireMergedFile(result: { merged_file?: string }): string {
@@ -1292,6 +1293,53 @@ describe("downloadHistory", () => {
             },
           ),
         /API error \(400\): Bad Request/,
+      );
+
+      assert.equal(calls, 1);
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts ranged downloads on history 403 API errors before later pages", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "insight-history-"));
+    let calls = 0;
+
+    try {
+      await assert.rejects(
+        () =>
+          downloadHistory(
+            {
+              symbol: "NASDAQ:AAPL",
+              from: "2024-01",
+              to: "2024-02",
+              bar_type: "minute",
+              output_dir: outputDir,
+              concurrency: 1,
+            },
+            {
+              request: async () => {
+                calls += 1;
+                throw new ApiError(
+                  403,
+                  "Access denied. Your plan does not allow access to this endpoint.",
+                  {
+                    error: "forbidden",
+                    message: "Access denied. Your plan does not allow access to this endpoint.",
+                  },
+                );
+              },
+            },
+          ),
+        (error) => {
+          assert.ok(error instanceof ApiError);
+          assert.equal(error.status, 403);
+          assert.deepEqual(error.body, {
+            error: "forbidden",
+            message: "Access denied. Your plan does not allow access to this endpoint.",
+          });
+          return true;
+        },
       );
 
       assert.equal(calls, 1);

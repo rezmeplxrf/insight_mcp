@@ -1,8 +1,8 @@
 const BASE_URL = "https://api.insightsentry.com";
-const HISTORY_PLAN_NAMES = new Set(["ultra", "mega", "enterprise"]);
 const DEFAULT_RETRY_DELAYS_MS = [500, 1000] as const;
 const HISTORY_RATE_LIMIT_RETRY_DELAY_MS = 60_000;
 const HISTORY_CONCURRENCY_MAX_RETRIES = 5;
+const RETRY_AFTER_MAX_RETRIES = 5;
 const RETRYABLE_TERMINAL_STATUSES = new Set([408, 429]);
 
 // Symbol code must be EXCHANGE:SYMBOL format (e.g., NASDAQ:AAPL)
@@ -14,12 +14,21 @@ const SYMBOL_PARAM_NAMES = new Set(["symbol", "code", "codes"]);
 export class ApiError extends Error {
   readonly status: number;
   readonly apiMessage: string;
+  readonly body: unknown;
+  readonly retryAfterMs: number | null;
 
-  constructor(status: number, apiMessage: string) {
+  constructor(
+    status: number,
+    apiMessage: string,
+    body: unknown = null,
+    retryAfterMs: number | null = null,
+  ) {
     super(`API error (${status}): ${apiMessage}`);
     this.name = "ApiError";
     this.status = status;
     this.apiMessage = apiMessage;
+    this.body = body;
+    this.retryAfterMs = retryAfterMs;
   }
 
   get retryable(): boolean {
@@ -37,11 +46,15 @@ export interface ApiClientOptions {
   retryDelaysMs?: readonly number[];
   historyRateLimitRetryDelayMs?: number;
   sleep?: (delayMs: number) => Promise<void>;
+  onRetry?: (event: ApiRetryEvent) => void;
 }
 
-export interface ApiPlanEntitlementError {
-  key: string;
-  error: string;
+export interface ApiRetryEvent {
+  status: number;
+  delayMs: number;
+  attempt: number;
+  pathTemplate: string;
+  reason: string;
 }
 
 function validateSymbolParams(params: Record<string, any>): string | null {
@@ -66,37 +79,6 @@ function isHistoryEndpoint(pathTemplate: string): boolean {
   return /\/history(?:[/?#]|$)/.test(pathTemplate);
 }
 
-function decodeJwtPayload(token: string): Record<string, any> | null {
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
-
-  try {
-    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
-    return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
-  } catch {
-    return null;
-  }
-}
-
-export function validateApiPlanEntitlements(
-  apiKey: string,
-  pathTemplate: string,
-): ApiPlanEntitlementError | null {
-  if (isHistoryEndpoint(pathTemplate)) {
-    const payload = decodeJwtPayload(apiKey);
-    const plan = typeof payload?.plan === "string" ? payload.plan.trim().toLowerCase() : "";
-    if (HISTORY_PLAN_NAMES.has(plan)) return null;
-
-    return {
-      key: "plan",
-      error:
-        "The /history endpoint requires an Ultra, Mega, or Enterprise plan. Use get_symbol_series for recent data or upgrade your InsightSentry plan for deep historical access.",
-    };
-  }
-
-  return null;
-}
-
 export function isTerminalApiError(error: unknown): boolean {
   if (error instanceof ApiError) return error.terminal;
   const message = error instanceof Error ? error.message : String(error);
@@ -106,14 +88,29 @@ export function isTerminalApiError(error: unknown): boolean {
 
 async function apiErrorFromResponse(response: Response): Promise<ApiError> {
   const text = await response.text().catch(() => "");
+  const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
   let errorMessage: string;
+  let body: unknown = null;
   try {
     const errorJson = JSON.parse(text);
+    body = errorJson;
     errorMessage = errorJson.message || errorJson.error || JSON.stringify(errorJson);
   } catch {
     errorMessage = text || `HTTP ${response.status} ${response.statusText}`;
+    body = text || null;
   }
-  return new ApiError(response.status, errorMessage);
+  return new ApiError(response.status, errorMessage, body, retryAfterMs);
+}
+
+function parseRetryAfterMs(value: string | null): number | null {
+  if (!value?.trim()) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.ceil(seconds * 1000);
+  }
+  const dateMs = Date.parse(value);
+  if (!Number.isFinite(dateMs)) return null;
+  return Math.max(0, dateMs - Date.now());
 }
 
 function sleep(delayMs: number): Promise<void> {
@@ -137,6 +134,7 @@ export class ApiClient {
   private historyRateLimitRetryDelayMs: number;
   private historyRateLimitPause: Promise<void> | null = null;
   private sleep: (delayMs: number) => Promise<void>;
+  private onRetry?: (event: ApiRetryEvent) => void;
 
   constructor(apiKey: string, options: ApiClientOptions = {}) {
     this.apiKey = apiKey;
@@ -144,6 +142,7 @@ export class ApiClient {
     this.historyRateLimitRetryDelayMs =
       options.historyRateLimitRetryDelayMs ?? HISTORY_RATE_LIMIT_RETRY_DELAY_MS;
     this.sleep = options.sleep ?? sleep;
+    this.onRetry = options.onRetry;
   }
 
   async request(method: string, pathTemplate: string, params: Record<string, any>): Promise<any> {
@@ -152,9 +151,6 @@ export class ApiClient {
     if (symbolError) {
       throw new Error(symbolError);
     }
-    const planError = validateApiPlanEntitlements(this.apiKey, pathTemplate);
-    if (planError) throw new Error(planError.error);
-
     // Separate path params from query/body params
     const pathParamNames = [...pathTemplate.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
 
@@ -226,6 +222,16 @@ export class ApiClient {
     attempt: number,
   ): Promise<boolean> {
     const retryDelay = this.retryDelaysMs[attempt];
+    if (error.status === 429 && error.retryAfterMs !== null && attempt < RETRY_AFTER_MAX_RETRIES) {
+      await this.sleepWithRetryNotice(
+        error,
+        pathTemplate,
+        attempt,
+        error.retryAfterMs,
+        "rate limited",
+      );
+      return true;
+    }
     if (error.retryable && retryDelay !== undefined) {
       await this.sleep(retryDelay);
       return true;
@@ -240,7 +246,13 @@ export class ApiClient {
       isHistoryConcurrencyMessage(error.apiMessage) &&
       attempt < HISTORY_CONCURRENCY_MAX_RETRIES
     ) {
-      await this.sleep(this.historyRateLimitRetryDelayMs * 2 ** attempt);
+      await this.sleepWithRetryNotice(
+        error,
+        pathTemplate,
+        attempt,
+        this.historyRateLimitRetryDelayMs * 2 ** attempt,
+        "history concurrency limit",
+      );
       return true;
     }
     if (
@@ -249,15 +261,25 @@ export class ApiClient {
       error.status === 429 &&
       isRetryableHistoryRateLimitMessage(error.apiMessage)
     ) {
-      await this.waitForHistoryRateLimitPause();
+      await this.waitForHistoryRateLimitPause(error, pathTemplate, attempt);
       return true;
     }
     return false;
   }
 
-  private async waitForHistoryRateLimitPause(): Promise<void> {
+  private async waitForHistoryRateLimitPause(
+    error: ApiError,
+    pathTemplate: string,
+    attempt: number,
+  ): Promise<void> {
     if (!this.historyRateLimitPause) {
-      const pause = this.sleep(this.historyRateLimitRetryDelayMs).finally(() => {
+      const pause = this.sleepWithRetryNotice(
+        error,
+        pathTemplate,
+        attempt,
+        this.historyRateLimitRetryDelayMs,
+        "history rate limit",
+      ).finally(() => {
         if (this.historyRateLimitPause === pause) {
           this.historyRateLimitPause = null;
         }
@@ -265,5 +287,22 @@ export class ApiClient {
       this.historyRateLimitPause = pause;
     }
     await this.historyRateLimitPause;
+  }
+
+  private async sleepWithRetryNotice(
+    error: ApiError,
+    pathTemplate: string,
+    attempt: number,
+    delayMs: number,
+    reason: string,
+  ): Promise<void> {
+    this.onRetry?.({
+      status: error.status,
+      delayMs,
+      attempt,
+      pathTemplate,
+      reason,
+    });
+    await this.sleep(delayMs);
   }
 }

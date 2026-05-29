@@ -3,6 +3,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import { ApiError } from "../src/api-client.js";
 import {
   buildHelp,
   buildToolHelp,
@@ -11,7 +12,7 @@ import {
   parseArgs,
   runCli,
 } from "../src/cli.js";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, saveConfig } from "../src/config.js";
 import { type ToolDefinition, toolDefinitions } from "../src/tool-definitions.js";
 
 function utcDateParts(date = new Date()): { day: string; month: string } {
@@ -136,6 +137,20 @@ describe("tool definitions", () => {
       assert.match(buildToolHelp(tool), /next_token/);
       assert.match(tool.description, /next_token/);
     }
+  });
+
+  it("exposes current newsfeed filters from the public OpenAPI contract", () => {
+    const tool = findTool("get_newsfeed");
+
+    for (const paramName of ["keywords", "source", "related_symbols", "title", "content"]) {
+      const schema = tool.schema[paramName];
+      assert.ok(schema, `get_newsfeed should expose ${paramName}`);
+      assert.equal(schema.safeParse("tesla").success, true);
+    }
+
+    assert.equal(tool.schema.limit.safeParse(50).success, true);
+    assert.equal(tool.schema.limit.safeParse("50").success, false);
+    assert.match(tool.description, /field-specific filtering/);
   });
 });
 
@@ -732,6 +747,71 @@ describe("runCli", () => {
     await runCli(["search_symbols", "--query", "apple"], { write, exit, request: mockRequest });
     const parsed = JSON.parse(output);
     assert.deepEqual(parsed, { symbols: [{ code: "NASDAQ:AAPL" }] });
+    assert.equal(exitCode, undefined);
+  });
+
+  it("prints API JSON error bodies", async () => {
+    await runCli(["get_newsfeed", "--source", "Reuters"], {
+      write,
+      exit,
+      request: async () => {
+        throw new ApiError(
+          403,
+          "Access denied. Your plan does not allow access to this endpoint.",
+          {
+            error: "forbidden",
+            message: "Access denied. Your plan does not allow access to this endpoint.",
+          },
+        );
+      },
+    });
+
+    assert.ok(output.startsWith("Error:\n{"));
+    assert.ok(output.includes('"error": "forbidden"'));
+    assert.ok(
+      output.includes(
+        '"message": "Access denied. Your plan does not allow access to this endpoint."',
+      ),
+    );
+    assert.equal(exitCode, 1);
+  });
+
+  it("reports Retry-After waits before retrying rate-limited API calls", async () => {
+    const originalFetch = globalThis.fetch;
+    const progress: string[] = [];
+    let calls = 0;
+    saveConfig({ apiKey: jwt({ uuid: "user@example.com", plan: "pro" }) });
+    globalThis.fetch = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": "0.001" },
+        });
+      }
+      return new Response(JSON.stringify({ symbols: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    try {
+      await runCli(["search_symbols", "--query", "apple"], {
+        write,
+        exit,
+        progress: (message) => progress.push(message),
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    assert.deepEqual(JSON.parse(output), { symbols: [] });
+    assert.equal(calls, 2);
+    assert.ok(
+      progress.some((message) =>
+        message.includes("Rate limited (rate limited). Retrying in 1 second"),
+      ),
+    );
     assert.equal(exitCode, undefined);
   });
 

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { ApiClient } from "./api-client.js";
+import { ApiClient, ApiError, type ApiRetryEvent } from "./api-client.js";
 import { flexibleInputSchema } from "./arg-coercion.js";
 import { getAuthStatus, getWhoami } from "./auth-status.js";
 import { renderChart } from "./chart.js";
@@ -290,21 +290,25 @@ for (const tool of toolDefinitions) {
         };
       }
       try {
+        const retryNotices: string[] = [];
         const output = await runApiTool({
           toolName: tool.name,
           method: tool.method,
           pathTemplate: tool.pathTemplate,
           args,
-          request: (method, pathTemplate, params) => client.request(method, pathTemplate, params),
+          request: createRequestWithRetryNotices(retryNotices),
         });
 
         const content = typeof output === "string" ? output : JSON.stringify(output, null, 2);
         return {
-          content: await withUpgradeNotice([{ type: "text" as const, text: content }]),
+          content: await withUpgradeNotice([
+            ...retryNotices.map((text) => ({ type: "text" as const, text })),
+            { type: "text" as const, text: content },
+          ]),
         };
       } catch (error: any) {
         return {
-          content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+          content: [{ type: "text" as const, text: formatToolError(error) }],
           isError: true,
         };
       }
@@ -339,10 +343,10 @@ for (const toolName of HISTORY_DOWNLOAD_TOOL_NAMES) {
         if (symbolValidationError) {
           throw new Error(`Invalid ${symbolValidationError.key}: ${symbolValidationError.error}`);
         }
-        const activeClient = client;
+        const retryNotices: string[] = [];
         const progress: string[] = [];
         const result = await downloadHistory(args, {
-          request: (method, path, params) => activeClient.request(method, path, params),
+          request: createRequestWithRetryNotices(retryNotices),
           onProgress: (event) => {
             progress.push(
               `[${event.completed}/${event.total}] ${event.status} ${event.symbol} ${event.start_date}`,
@@ -353,13 +357,17 @@ for (const toolName of HISTORY_DOWNLOAD_TOOL_NAMES) {
           content: await withUpgradeNotice([
             {
               type: "text" as const,
-              text: JSON.stringify({ ...result, progress }, null, 2),
+              text: JSON.stringify(
+                { ...result, progress: [...retryNotices, ...progress] },
+                null,
+                2,
+              ),
             },
           ]),
         };
       } catch (error: any) {
         return {
-          content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+          content: [{ type: "text" as const, text: formatToolError(error) }],
           isError: true,
         };
       }
@@ -467,6 +475,31 @@ async function withUpgradeNotice(content: ToolContent[]): Promise<ToolContent[]>
   const notice = formatUpgradeNotice(status);
   if (notice) content.push({ type: "text", text: notice });
   return content;
+}
+
+function createRequestWithRetryNotices(retryNotices: string[]) {
+  if (!apiKey) throw new Error("No InsightSentry API key configured");
+  const activeClient = new ApiClient(apiKey, {
+    onRetry: (event) => retryNotices.push(formatRetryNotice(event)),
+  });
+  return (method: string, pathTemplate: string, params: Record<string, any>) =>
+    activeClient.request(method, pathTemplate, params);
+}
+
+function formatRetryNotice(event: ApiRetryEvent): string {
+  const seconds = Math.max(1, Math.ceil(event.delayMs / 1000));
+  return `Rate limited (${event.reason}). Retrying in ${seconds} second${seconds === 1 ? "" : "s"}...`;
+}
+
+function formatToolError(error: any): string {
+  if (error instanceof ApiError && isDisplayableJsonBody(error.body)) {
+    return `Error:\n${JSON.stringify(error.body, null, 2)}`;
+  }
+  return `Error: ${error?.message ?? String(error)}`;
+}
+
+function isDisplayableJsonBody(value: unknown): value is Record<string, unknown> | unknown[] {
+  return value !== null && typeof value === "object";
 }
 
 async function getCachedVersionStatus() {

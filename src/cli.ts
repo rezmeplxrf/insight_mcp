@@ -5,7 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import type { ChartConfiguration } from "chart.js";
 import { z } from "zod";
-import { ApiClient, validateApiPlanEntitlements } from "./api-client.js";
+import { ApiClient, ApiError, type ApiRetryEvent } from "./api-client.js";
 import { coerceArgs, getZodEnumValues, getZodTypeName, isOptionalZodType } from "./arg-coercion.js";
 import { type AuthStatus, getAuthStatus, validateApiKeyForLogin } from "./auth-status.js";
 import { renderChart } from "./chart.js";
@@ -622,7 +622,7 @@ async function runCliInner(argv: string[], io: CliIO): Promise<void> {
       io.write(JSON.stringify(result, null, 2));
       await maybeWritePostToolUpgradeNotice(io);
     } catch (error: any) {
-      io.write(`Error: ${error.message}\n`);
+      io.write(formatCliError(error));
       io.exit(1);
     }
     return;
@@ -778,11 +778,7 @@ async function runCliInner(argv: string[], io: CliIO): Promise<void> {
   try {
     const knownArgKeys = ["filter", "store", "output_file", "output_dir"];
     const initialApiArgs = pickKnownArgs(resolvedArgs, Object.keys(tool.schema), knownArgKeys);
-    const apiArgs = await resolveApiPlanEntitlementArgs(initialApiArgs, tool, sessionApiKey, io);
-    if (!apiArgs) {
-      io.exit(1);
-      return;
-    }
+    const apiArgs = initialApiArgs;
     reportArgUsage(io, apiArgs, Object.keys(tool.schema), inputArgs, knownArgKeys);
     const outputValue = await runApiTool({
       toolName: tool.name,
@@ -796,7 +792,7 @@ async function runCliInner(argv: string[], io: CliIO): Promise<void> {
     io.write(output);
     await maybeWritePostToolUpgradeNotice(io);
   } catch (error: any) {
-    io.write(`Error: ${error.message}\n`);
+    io.write(formatCliError(error));
     io.exit(1);
   }
 }
@@ -966,8 +962,26 @@ function resolveRequest(io: CliIO, apiKeyOverride?: string): RequestFn | null {
   const apiKey = apiKeyOverride?.trim() || resolveApiKey();
   if (!apiKey) return null;
   if (io.createRequestFromApiKey) return io.createRequestFromApiKey(apiKey);
-  const client = new ApiClient(apiKey);
+  const client = new ApiClient(apiKey, {
+    onRetry: (event) => io.progress?.(formatRetryNotice(event)),
+  });
   return (method, path, params) => client.request(method, path, params);
+}
+
+function formatRetryNotice(event: ApiRetryEvent): string {
+  const seconds = Math.max(1, Math.ceil(event.delayMs / 1000));
+  return `Rate limited (${event.reason}). Retrying in ${seconds} second${seconds === 1 ? "" : "s"}...`;
+}
+
+function formatCliError(error: any): string {
+  if (error instanceof ApiError && isDisplayableJsonBody(error.body)) {
+    return `Error:\n${JSON.stringify(error.body, null, 2)}\n`;
+  }
+  return `Error: ${error?.message ?? String(error)}\n`;
+}
+
+function isDisplayableJsonBody(value: unknown): value is Record<string, unknown> | unknown[] {
+  return value !== null && typeof value === "object";
 }
 
 function reportArgUsage(
@@ -1005,23 +1019,6 @@ function pickKnownArgs(
 function formatArgValue(value: string): string {
   const singleLine = value.replace(/\s+/g, " ").trim();
   return singleLine.length <= 120 ? singleLine : `${singleLine.slice(0, 117)}...`;
-}
-
-async function resolveApiPlanEntitlementArgs(
-  args: Record<string, string>,
-  tool: ToolDefinition,
-  apiKeyOverride: string | undefined,
-  io: CliIO,
-): Promise<Record<string, string> | null> {
-  const apiKey = apiKeyOverride?.trim() || resolveApiKey();
-  if (!apiKey) return args;
-
-  const error = validateApiPlanEntitlements(apiKey, tool.pathTemplate);
-  if (!error) return args;
-
-  const label = toolPromptLabel(error.key);
-  io.write(`Invalid ${label}: ${error.error}\n`);
-  return null;
 }
 
 function missingToolArgs(args: Record<string, string>, tool: ToolDefinition): string[] {

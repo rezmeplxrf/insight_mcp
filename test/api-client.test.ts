@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { ApiClient, isTerminalApiError } from "../src/api-client.js";
+import { ApiClient, ApiError, isTerminalApiError } from "../src/api-client.js";
 
 function jwt(payload: Record<string, unknown>): string {
   const encode = (value: unknown) =>
@@ -16,28 +16,7 @@ describe("ApiClient", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("blocks /history requests before fetch for plans below ultra", async () => {
-    let fetchCalled = false;
-    globalThis.fetch = async () => {
-      fetchCalled = true;
-      throw new Error("fetch should not be called");
-    };
-
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "pro" }));
-
-    await assert.rejects(
-      () =>
-        client.request("GET", "/v3/symbols/{symbol}/history", {
-          symbol: "NASDAQ:AAPL",
-          bar_type: "minute",
-          start_date: "2026-01",
-        }),
-      /history endpoint requires an Ultra, Mega, or Enterprise plan/,
-    );
-    assert.equal(fetchCalled, false);
-  });
-
-  it("allows /history requests for ultra, mega, and enterprise plans", async () => {
+  it("does not locally gate /history requests by the JWT plan claim", async () => {
     const requestedUrls: string[] = [];
     globalThis.fetch = async (input) => {
       requestedUrls.push(String(input));
@@ -47,16 +26,15 @@ describe("ApiClient", () => {
       });
     };
 
-    for (const plan of ["ultra", "mega", "enterprise"]) {
-      const client = new ApiClient(jwt({ uuid: "user@example.com", plan }));
-      await client.request("GET", "/v3/symbols/{symbol}/history", {
-        symbol: "NASDAQ:AAPL",
-        bar_type: "minute",
-        start_date: "2026-01",
-      });
-    }
+    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "pro" }));
 
-    assert.equal(requestedUrls.length, 3);
+    await client.request("GET", "/v3/symbols/{symbol}/history", {
+      symbol: "NASDAQ:AAPL",
+      bar_type: "minute",
+      start_date: "2026-01",
+    });
+
+    assert.equal(requestedUrls.length, 1);
   });
 
   it("does not require an archive plan for non-history endpoints", async () => {
@@ -170,9 +148,45 @@ describe("ApiClient", () => {
     assert.deepEqual(delays, []);
   });
 
+  it("keeps parsed JSON bodies on API errors", async () => {
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          error: "forbidden",
+          message: "Access denied. Your plan does not allow access to this endpoint.",
+        }),
+        {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        },
+      );
+
+    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "pro" }));
+
+    await assert.rejects(
+      async () => {
+        await client.request("GET", "/v3/symbols/{symbol}/history", {
+          symbol: "NASDAQ:AAPL",
+          bar_type: "minute",
+          start_date: "2026-01",
+        });
+      },
+      (error) => {
+        assert.ok(error instanceof ApiError);
+        assert.equal(error.status, 403);
+        assert.deepEqual(error.body, {
+          error: "forbidden",
+          message: "Access denied. Your plan does not allow access to this endpoint.",
+        });
+        return true;
+      },
+    );
+  });
+
   it("retries /history rate limits once after one minute", async () => {
     let calls = 0;
     const delays: number[] = [];
+    const retryEvents: string[] = [];
     globalThis.fetch = async () => {
       calls += 1;
       if (calls === 1) {
@@ -191,6 +205,9 @@ describe("ApiClient", () => {
       sleep: async (delayMs) => {
         delays.push(delayMs);
       },
+      onRetry: (event) => {
+        retryEvents.push(`${event.status}:${event.reason}:${event.delayMs}`);
+      },
     });
 
     assert.deepEqual(
@@ -203,6 +220,42 @@ describe("ApiClient", () => {
     );
     assert.equal(calls, 2);
     assert.deepEqual(delays, [60_000]);
+    assert.deepEqual(retryEvents, ["429:history rate limit:60000"]);
+  });
+
+  it("respects Retry-After on rate limited responses", async () => {
+    let calls = 0;
+    const delays: number[] = [];
+    const retryEvents: string[] = [];
+    globalThis.fetch = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": "7" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+      sleep: async (delayMs) => {
+        delays.push(delayMs);
+      },
+      onRetry: (event) => {
+        retryEvents.push(`${event.status}:${event.reason}:${event.delayMs}`);
+      },
+    });
+
+    assert.deepEqual(await client.request("GET", "/v3/symbols/search", { query: "apple" }), {
+      ok: true,
+    });
+    assert.equal(calls, 2);
+    assert.deepEqual(delays, [7000]);
+    assert.deepEqual(retryEvents, ["429:rate limited:7000"]);
   });
 
   it("retries /history request timeouts with normal backoff", async () => {
