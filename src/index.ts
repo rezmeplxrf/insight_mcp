@@ -39,7 +39,7 @@ If you're unsure about a symbol code, search for it: \`search_symbols({ query: "
 ## Common Workflows
 
 ### "Am I logged in?" / "Is InsightSentry configured?"
-Call \`whoami\` to check whether this MCP server has an InsightSentry API key configured. It parses the local JWT and returns the logged-in user's email/uuid without calling the external API.
+Call \`whoami\` to check whether this MCP server has an InsightSentry API key configured. It parses the local JWT and returns the logged-in user's email, falling back to uuid, without calling the external API.
 
 ### "Get me data on a stock/crypto/asset"
 1. \`search_symbols\` — **Always start here.** Find the correct EXCHANGE:SYMBOL code.
@@ -195,8 +195,7 @@ if (!apiKey) {
   apiKeyError =
     "No InsightSentry API key found. Set INSIGHTSENTRY_API_KEY or run `insight login --key <your-api-key>`. Get your API key from https://insightsentry.com/dashboard";
 } else if (!authStatus.key_format_valid) {
-  apiKeyError =
-    "InsightSentry API key is not a valid API key. InsightSentry API keys are JWT tokens. Get your API key from https://insightsentry.com/dashboard";
+  apiKeyError = `${authStatus.message} Get your API key from https://insightsentry.com/dashboard`;
 } else if (authStatus.expired) {
   apiKeyError =
     "InsightSentry API key is expired. Get a new API key from https://insightsentry.com/dashboard";
@@ -213,7 +212,7 @@ server.registerTool(
   "whoami",
   {
     description:
-      "Print the logged-in InsightSentry user's email/uuid by parsing the configured API key JWT locally. This does not call the external API.",
+      "Print the logged-in InsightSentry user's email, falling back to uuid, by parsing the configured API key JWT locally. This does not call the external API.",
     inputSchema: {},
   },
   async () => {

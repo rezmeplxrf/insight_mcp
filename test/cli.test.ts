@@ -217,6 +217,7 @@ describe("buildHelp", () => {
     assert.ok(help.includes("get_quotes"));
     assert.ok(help.includes("get_symbol_series"));
     assert.ok(help.includes("insight whoami"));
+    assert.ok(help.includes("Print the logged-in user's email/uuid"));
     assert.ok(help.includes("insight version"));
     assert.ok(help.includes("insight update"));
   });
@@ -406,7 +407,7 @@ describe("runCli", () => {
 
   it("prompts for an API key before the no-args interactive tool picker", async () => {
     const selectedTool = "get_fundamentals_meta";
-    const apiKey = jwt({ uuid: "user@example.com", plan: "ultra" });
+    const apiKey = jwt({ email: "user@example.com" });
     const questions: string[] = [];
 
     await runCli([], {
@@ -443,7 +444,7 @@ describe("runCli", () => {
   it("uses the prompted API key for the current no-args interactive run", async () => {
     const origKey = process.env.INSIGHTSENTRY_API_KEY;
     const selectedTool = "get_fundamentals_meta";
-    const apiKey = jwt({ uuid: "user@example.com", plan: "ultra" });
+    const apiKey = jwt({ email: "user@example.com" });
     let requestKey: string | undefined;
 
     process.env.INSIGHTSENTRY_API_KEY = "bad.env.key";
@@ -591,7 +592,7 @@ describe("runCli", () => {
   });
 
   it("login with key saves config", async () => {
-    await runCli(["login", "--key", jwt({ uuid: "user@example.com", plan: "enterprise" })], {
+    await runCli(["login", "--key", jwt({ email: "user@example.com" })], {
       write,
       exit,
     });
@@ -607,16 +608,19 @@ describe("runCli", () => {
     assert.equal(exitCode, 1);
   });
 
-  it("login rejects a JWT missing uuid or plan", async () => {
-    await runCli(["login", "--key", jwt({ uuid: "user@example.com" })], { write, exit });
+  it("login rejects a JWT missing email or uuid", async () => {
+    await runCli(["login", "--key", jwt({ plan: "enterprise" })], {
+      write,
+      exit,
+    });
 
-    assert.ok(output.includes("API key JWT must include uuid and plan"));
+    assert.ok(output.includes("API key JWT must include email or uuid"));
     assert.deepEqual(loadConfig(), {});
     assert.equal(exitCode, 1);
   });
 
   it("login prompts for key when interactive", async () => {
-    const answers = new Map([["API key: ", jwt({ uuid: "user@example.com", plan: "mega" })]]);
+    const answers = new Map([["API key: ", jwt({ email: "user@example.com" })]]);
 
     await runCli(["login"], {
       write,
@@ -629,8 +633,19 @@ describe("runCli", () => {
     assert.equal(exitCode, 0);
   });
 
+  it("login accepts uuid when email is missing", async () => {
+    await runCli(["login", "--key", jwt({ uuid: "user-id" })], {
+      write,
+      exit,
+    });
+
+    assert.ok(output.includes("API key saved"));
+    assert.equal(exitCode, 0);
+  });
+
   it("interactive login reprompts after an invalid prompted key", async () => {
-    const answers = [jwt({ plan: "enterprise" }), jwt({ uuid: "user@example.com", plan: "ultra" })];
+    const validKey = jwt({ email: "user@example.com" });
+    const answers = [jwt({ plan: "enterprise" }), validKey];
 
     await runCli(["login"], {
       write,
@@ -639,9 +654,9 @@ describe("runCli", () => {
       prompt: async () => answers.shift() ?? "",
     });
 
-    assert.ok(output.includes("API key JWT must include uuid and plan"));
+    assert.ok(output.includes("API key JWT must include email or uuid"));
     assert.ok(output.includes("API key saved"));
-    assert.equal(loadConfig().apiKey, jwt({ uuid: "user@example.com", plan: "ultra" }));
+    assert.equal(loadConfig().apiKey, validKey);
     assert.equal(exitCode, 0);
   });
 
@@ -780,7 +795,7 @@ describe("runCli", () => {
     const originalFetch = globalThis.fetch;
     const progress: string[] = [];
     let calls = 0;
-    saveConfig({ apiKey: jwt({ uuid: "user@example.com", plan: "pro" }) });
+    saveConfig({ apiKey: jwt({ uuid: "user@example.com" }) });
     globalThis.fetch = async () => {
       calls += 1;
       if (calls === 1) {

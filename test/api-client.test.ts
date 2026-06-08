@@ -47,7 +47,7 @@ describe("ApiClient", () => {
       });
     };
 
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "pro" }));
+    const client = new ApiClient(jwt({ uuid: "user@example.com" }));
 
     await client.request("GET", "/v3/symbols/{symbol}/series", {
       symbol: "NASDAQ:AAPL",
@@ -83,7 +83,7 @@ describe("ApiClient", () => {
       });
     };
 
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+    const client = new ApiClient(jwt({ uuid: "user@example.com" }), {
       sleep: async (delayMs) => {
         delays.push(delayMs);
       },
@@ -110,7 +110,7 @@ describe("ApiClient", () => {
       });
     };
 
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+    const client = new ApiClient(jwt({ uuid: "user@example.com" }), {
       sleep: async (delayMs) => {
         delays.push(delayMs);
       },
@@ -134,7 +134,7 @@ describe("ApiClient", () => {
       });
     };
 
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+    const client = new ApiClient(jwt({ uuid: "user@example.com" }), {
       sleep: async (delayMs) => {
         delays.push(delayMs);
       },
@@ -161,7 +161,7 @@ describe("ApiClient", () => {
         },
       );
 
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "pro" }));
+    const client = new ApiClient(jwt({ uuid: "user@example.com" }));
 
     await assert.rejects(
       async () => {
@@ -201,7 +201,7 @@ describe("ApiClient", () => {
       });
     };
 
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+    const client = new ApiClient(jwt({ uuid: "user@example.com" }), {
       sleep: async (delayMs) => {
         delays.push(delayMs);
       },
@@ -241,7 +241,7 @@ describe("ApiClient", () => {
       });
     };
 
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+    const client = new ApiClient(jwt({ uuid: "user@example.com" }), {
       sleep: async (delayMs) => {
         delays.push(delayMs);
       },
@@ -278,7 +278,7 @@ describe("ApiClient", () => {
       });
     };
 
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+    const client = new ApiClient(jwt({ uuid: "user@example.com" }), {
       sleep: async (delayMs) => {
         delays.push(delayMs);
       },
@@ -319,7 +319,7 @@ describe("ApiClient", () => {
       });
     };
 
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+    const client = new ApiClient(jwt({ uuid: "user@example.com" }), {
       sleep: async (delayMs) => {
         delays.push(delayMs);
       },
@@ -354,7 +354,7 @@ describe("ApiClient", () => {
       );
     };
 
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+    const client = new ApiClient(jwt({ uuid: "user@example.com" }), {
       sleep: async (delayMs) => {
         delays.push(delayMs);
       },
@@ -394,7 +394,7 @@ describe("ApiClient", () => {
       });
     };
 
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+    const client = new ApiClient(jwt({ uuid: "user@example.com" }), {
       sleep: async (delayMs) => {
         delays.push(delayMs);
       },
@@ -431,7 +431,7 @@ describe("ApiClient", () => {
       });
     };
 
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+    const client = new ApiClient(jwt({ uuid: "user@example.com" }), {
       sleep: async (delayMs) => {
         delays.push(delayMs);
       },
@@ -455,7 +455,7 @@ describe("ApiClient", () => {
       });
     };
 
-    const client = new ApiClient(jwt({ uuid: "user@example.com", plan: "enterprise" }), {
+    const client = new ApiClient(jwt({ uuid: "user@example.com" }), {
       sleep: async () => {},
     });
 

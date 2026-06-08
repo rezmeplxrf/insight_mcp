@@ -191,7 +191,7 @@ export function buildHelp(): string {
   lines.push("");
   lines.push("Authentication:");
   lines.push("  insight login --key <your-api-key>    Save API key (persisted across sessions)");
-  lines.push("  insight whoami                        Print the logged-in user's email");
+  lines.push("  insight whoami                        Print the logged-in user's email/uuid");
   lines.push("  insight version                       Check current/latest CLI version");
   lines.push("  insight logout                        Remove saved API key");
   lines.push("  insight update                        Update this CLI with npm");

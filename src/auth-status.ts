@@ -22,9 +22,7 @@ export interface WhoamiResult {
 
 interface JwtPayload {
   uuid?: string;
-  sub?: string;
   email?: string;
-  plan?: string;
   exp?: number;
 }
 
@@ -50,11 +48,11 @@ export function getWhoamiForKey(apiKey: string | undefined, _source: AuthKeySour
     };
   }
 
-  const identity = payload.uuid ?? payload.email ?? payload.sub;
+  const identity = getPayloadIdentity(payload);
   if (!identity) {
     return {
       ok: false,
-      error: "API key JWT does not include uuid, email, or sub.",
+      error: "API key JWT does not include email or uuid.",
     };
   }
 
@@ -71,14 +69,15 @@ export function validateApiKeyForLogin(apiKey: string): WhoamiResult {
     };
   }
 
-  if (!payload.uuid?.trim() || !payload.plan?.trim()) {
+  const identity = getPayloadIdentity(payload);
+  if (!identity) {
     return {
       ok: false,
-      error: "API key JWT must include uuid and plan fields.",
+      error: "API key JWT must include email or uuid.",
     };
   }
 
-  return { ok: true, identity: payload.uuid };
+  return { ok: true, identity };
 }
 
 export function getAuthStatusForKey(
@@ -88,6 +87,7 @@ export function getAuthStatusForKey(
   now = new Date(),
 ): AuthStatus {
   const token = apiKey?.trim();
+  const sourceLabel = source === "environment" ? "INSIGHTSENTRY_API_KEY" : "saved config";
   if (!token) {
     return {
       authenticated: false,
@@ -107,14 +107,23 @@ export function getAuthStatusForKey(
       config_path: configPath,
       key_present: true,
       key_format_valid: false,
-      message:
-        "Logged out. INSIGHTSENTRY_API_KEY is not a valid API key. InsightSentry API keys are JWT tokens.",
+      message: `Logged out. API key from ${sourceLabel} is not a valid API key. InsightSentry API keys are JWT tokens.`,
     };
   }
 
   const expiresAt = payload.exp ? new Date(payload.exp * 1000) : undefined;
   const expired = expiresAt ? expiresAt.getTime() <= now.getTime() : undefined;
-  const sourceLabel = source === "environment" ? "INSIGHTSENTRY_API_KEY" : "saved config";
+  const identity = getPayloadIdentity(payload);
+  if (!identity) {
+    return {
+      authenticated: false,
+      source,
+      config_path: configPath,
+      key_present: true,
+      key_format_valid: false,
+      message: `Logged out. API key from ${sourceLabel} must include email or uuid.`,
+    };
+  }
 
   return {
     authenticated: expired !== true,
@@ -122,7 +131,7 @@ export function getAuthStatusForKey(
     config_path: configPath,
     key_present: true,
     key_format_valid: true,
-    subject: payload.uuid ?? payload.email ?? payload.sub,
+    subject: identity,
     expires_at: expiresAt?.toISOString(),
     expired,
     message:
@@ -147,4 +156,10 @@ function decodeJwtPayload(token: string): JwtPayload | null {
   } catch {
     return null;
   }
+}
+
+function getPayloadIdentity(payload: JwtPayload): string | undefined {
+  const email = typeof payload.email === "string" ? payload.email.trim() : "";
+  const uuid = typeof payload.uuid === "string" ? payload.uuid.trim() : "";
+  return email || uuid || undefined;
 }

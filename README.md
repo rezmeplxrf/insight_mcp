@@ -32,7 +32,7 @@ insight whoami
 insight logout
 ```
 
-`whoami` parses the configured JWT locally and prints `uuid`, falling back to `email` then `sub`.
+`whoami` parses the configured JWT locally and prints `email`, falling back to `uuid`.
 
 ## MCP Setup
 
@@ -96,7 +96,7 @@ Auth and files:
 
 | Tool | Purpose |
 |------|---------|
-| `whoami` | Print the configured user's `uuid`/email from the API key JWT |
+| `whoami` | Print the configured user's email/uuid from the API key JWT |
 | `download_history` | Download date ranges to JSON/CSV files |
 | `get_symbol_history` | Same as `download_history`; downloads history to files |
 | `render_chart` | Render Chart.js configs as PNG images |
